@@ -1,0 +1,6 @@
+if BOARD_M2SF_ALGOL
+
+config BOARD
+       default "m2sf_algol"
+
+endif

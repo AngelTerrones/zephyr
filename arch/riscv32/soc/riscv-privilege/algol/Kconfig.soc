@@ -1,0 +1,8 @@
+choice
+prompt "Algol RISC-V CPU implementation"
+depends on SOC_SERIES_RISCV32_ALGOL
+
+config SOC_RISCV32_ALGOL
+       bool "RISC-V CPU implementation"
+
+endchoice

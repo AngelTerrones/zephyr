@@ -1,0 +1,51 @@
+if SOC_SERIES_RISCV32_ALGOL
+
+config SOC_SERIES
+       string
+       default "algol"
+
+config COMPILER_OPT
+       string
+       default "-march=RV32I"
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+       int
+       default 100000000
+
+config RISCV_SOC_INTERRUPT_INIT
+       bool
+       default y
+
+config RISCV_HAS_CPU_IDLE
+       bool
+       default n
+
+config RISCV_HAS_PLIC
+       bool
+       default n
+
+config NUM_IRQS
+       int
+       default 16
+
+config XIP
+       bool
+       default n
+
+config RISCV_RAM_BASE_ADDR
+       hex
+       default 0x10005000
+
+config RISCV_RAM_SIZE
+       hex
+       default 0x3000
+
+config RISCV_ROM_BASE_ADDR
+       hex
+       default	0x10000000
+
+config RISCV_ROM_SIZE
+       hex
+       default 0x5000
+
+endif # SOC_SERIES_RISCV32_EV

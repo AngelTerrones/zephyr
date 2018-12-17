@@ -1,0 +1,3 @@
+config BOARD_M2SF_ALGOL
+       bool "Microsemi SmartFusion 2 dev board with the Algol CPU"
+       depends on SOC_RISCV32_ALGOL

@@ -1,0 +1,11 @@
+identifier: m2sf_algol
+name: Microsemi SmartFusion2 dev board with the Algol CPU
+type: mcu
+arch: riscv32
+toolchain:
+  - zephyr
+ram: 32
+testing:
+  ignore_tags:
+    - net
+    - bluetooth
