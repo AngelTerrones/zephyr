@@ -3,10 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef _DRIVERS_GPIO_CMSDK_AHB_
-#define _DRIVERS_GPIO_CMSDK_AHB_
+#ifndef ZEPHYR_DRIVERS_GPIO_GPIO_CMSDK_AHB_H_
+#define ZEPHYR_DRIVERS_GPIO_GPIO_CMSDK_AHB_H_
 
-#include <gpio.h>
+#include <drivers/gpio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,4 +56,4 @@ struct gpio_cmsdk_ahb {
 }
 #endif
 
-#endif /* _DRIVERS_GPIO_CMSDK_AHB_ */
+#endif /* ZEPHYR_DRIVERS_GPIO_GPIO_CMSDK_AHB_H_ */

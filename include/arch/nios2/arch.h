@@ -11,73 +11,42 @@
  * included by the generic kernel interface header (include/arch/cpu.h)
  */
 
-#ifndef _ARCH_IFACE_H
-#define _ARCH_IFACE_H
+#ifndef ZEPHYR_INCLUDE_ARCH_NIOS2_ARCH_H_
+#define ZEPHYR_INCLUDE_ARCH_NIOS2_ARCH_H_
 
 #include <system.h>
-#include <arch/nios2/asm_inline.h>
-#include <generated_dts_board.h>
-#include "nios2.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <arch/nios2/thread.h>
+#include <arch/nios2/asm_inline.h>
+#include <arch/common/addr_types.h>
+#include <generated_dts_board.h>
+#include <arch/nios2/nios2.h>
+#include <arch/common/sys_io.h>
+#include <arch/common/ffs.h>
 
 #define STACK_ALIGN  4
-
-#define _NANO_ERR_CPU_EXCEPTION (0)     /* Any unhandled exception */
-#define _NANO_ERR_STACK_CHK_FAIL (2)    /* Stack corruption detected */
-#define _NANO_ERR_ALLOCATION_FAIL (3)   /* Kernel Allocation Failure */
-#define _NANO_ERR_SPURIOUS_INT (4)	/* Spurious interrupt */
-#define _NANO_ERR_KERNEL_OOPS (5)       /* Kernel oops (fatal to thread) */
-#define _NANO_ERR_KERNEL_PANIC (6)	/* Kernel panic (fatal to system) */
 
 #ifndef _ASMLANGUAGE
 #include <zephyr/types.h>
 #include <irq.h>
 #include <sw_isr_table.h>
 
-/* physical/virtual address types required by the kernel */
-typedef unsigned int paddr_t;
-typedef unsigned int vaddr_t;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/**
- * Configure a static interrupt.
- *
- * All arguments must be computable by the compiler at build time.
- *
- * Internally this function does a few things:
- *
- * 1. The enum statement has no effect but forces the compiler to only
- * accept constant values for the irq_p parameter, very important as the
- * numerical IRQ line is used to create a named section.
- *
- * 2. An instance of struct _isr_table_entry is created containing the ISR and
- * its parameter. If you look at how _sw_isr_table is created, each entry in
- * the array is in its own section named by the IRQ line number. What we are
- * doing here is to override one of the default entries (which points to the
- * spurious IRQ handler) with what was supplied here.
- *
- * There is no notion of priority with the Nios II internal interrupt
+/* There is no notion of priority with the Nios II internal interrupt
  * controller and no flags are currently supported.
- *
- * @param irq_p IRQ line number
- * @param priority_p Interrupt priority (ignored)
- * @param isr_p Interrupt service routine
- * @param isr_param_p ISR parameter
- * @param flags_p IRQ triggering options (currently unused)
- *
- * @return The vector assigned to this interrupt
  */
-#define _ARCH_IRQ_CONNECT(irq_p, priority_p, isr_p, isr_param_p, flags_p) \
+#define ARCH_IRQ_CONNECT(irq_p, priority_p, isr_p, isr_param_p, flags_p) \
 ({ \
-	_ISR_DECLARE(irq_p, 0, isr_p, isr_param_p); \
+	Z_ISR_DECLARE(irq_p, 0, isr_p, isr_param_p); \
 	irq_p; \
 })
 
-extern void _irq_spurious(void *unused);
+extern void z_irq_spurious(void *unused);
 
-static ALWAYS_INLINE unsigned int _arch_irq_lock(void)
+static ALWAYS_INLINE unsigned int arch_irq_lock(void)
 {
 	unsigned int key, tmp;
 
@@ -92,7 +61,7 @@ static ALWAYS_INLINE unsigned int _arch_irq_lock(void)
 	return key;
 }
 
-static ALWAYS_INLINE void _arch_irq_unlock(unsigned int key)
+static ALWAYS_INLINE void arch_irq_unlock(unsigned int key)
 {
 	/* If the CPU is built without certain features, then
 	 * the only writable bit in the status register is PIE
@@ -124,8 +93,13 @@ static ALWAYS_INLINE void _arch_irq_unlock(unsigned int key)
 #endif
 }
 
-void _arch_irq_enable(unsigned int irq);
-void _arch_irq_disable(unsigned int irq);
+static ALWAYS_INLINE bool arch_irq_unlocked(unsigned int key)
+{
+	return key & 1;
+}
+
+void arch_irq_enable(unsigned int irq);
+void arch_irq_disable(unsigned int irq);
 
 struct __esf {
 	u32_t ra; /* return address r31 */
@@ -148,14 +122,13 @@ struct __esf {
 	u32_t instr; /* Instruction being executed when exc occurred */
 };
 
-typedef struct __esf NANO_ESF;
-extern const NANO_ESF _default_esf;
+typedef struct __esf z_arch_esf_t;
 
-FUNC_NORETURN void _SysFatalErrorHandler(unsigned int reason,
-					 const NANO_ESF *esf);
+FUNC_NORETURN void z_SysFatalErrorHandler(unsigned int reason,
+					 const z_arch_esf_t *esf);
 
-FUNC_NORETURN void _NanoFatalErrorHandler(unsigned int reason,
-					  const NANO_ESF *esf);
+FUNC_NORETURN void z_NanoFatalErrorHandler(unsigned int reason,
+					  const z_arch_esf_t *esf);
 
 enum nios2_exception_cause {
 	NIOS2_EXCEPTION_UNKNOWN                      = -1,
@@ -198,13 +171,22 @@ enum nios2_exception_cause {
 	 BIT(NIOS2_EXCEPTION_ECC_DATA_ERR))
 
 
-extern u32_t _timer_cycle_get_32(void);
-#define _arch_k_cycle_get_32()	_timer_cycle_get_32()
+extern u32_t z_timer_cycle_get_32(void);
 
-#endif /* _ASMLANGUAGE */
+static inline u32_t arch_k_cycle_get_32(void)
+{
+	return z_timer_cycle_get_32();
+}
+
+static ALWAYS_INLINE void arch_nop(void)
+{
+	__asm__ volatile("nop");
+}
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* _ASMLANGUAGE */
+
+#endif /* ZEPHYR_INCLUDE_ARCH_NIOS2_ARCH_H_ */

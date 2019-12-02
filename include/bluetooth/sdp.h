@@ -7,8 +7,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef __BT_SDP_H
-#define __BT_SDP_H
+#ifndef ZEPHYR_INCLUDE_BLUETOOTH_SDP_H_
+#define ZEPHYR_INCLUDE_BLUETOOTH_SDP_H_
 
 /**
  * @brief Service Discovery Protocol (SDP)
@@ -17,12 +17,12 @@
  * @{
  */
 
+#include <bluetooth/uuid.h>
+#include <bluetooth/conn.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <bluetooth/uuid.h>
-#include <bluetooth/conn.h>
 
 /*
  * All definitions are based on Bluetooth Assigned Numbers
@@ -601,6 +601,7 @@ int bt_sdp_get_profile_version(const struct net_buf *buf, u16_t profile,
  *  @return 0 on success if feature found and valid, negative in case any error
  */
 int bt_sdp_get_features(const struct net_buf *buf, u16_t *features);
+
 #ifdef __cplusplus
 }
 #endif
@@ -609,4 +610,4 @@ int bt_sdp_get_features(const struct net_buf *buf, u16_t *features);
  * @}
  */
 
-#endif /* __BT_SDP_H */
+#endif /* ZEPHYR_INCLUDE_BLUETOOTH_SDP_H_ */

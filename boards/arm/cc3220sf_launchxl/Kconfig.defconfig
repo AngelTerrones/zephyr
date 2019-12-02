@@ -1,5 +1,6 @@
-# Kconfig - TI CC3220SF LaunchXL board configuration
-#
+# TI CC3220SF LaunchXL board configuration
+
+# SPDX-License-Identifier: Apache-2.0
 
 if BOARD_CC3220SF_LAUNCHXL
 
@@ -9,7 +10,7 @@ config BOARD
 if I2C
 
 config I2C_CC32XX
-	def_bool y
+	default y
 
 endif # I2C
 

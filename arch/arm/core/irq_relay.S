@@ -21,17 +21,15 @@
  * Note: Currently support mcuboot only.
  * */
 
-#include <board.h>
 #include <toolchain.h>
 #include <linker/sections.h>
-#include <drivers/system_timer.h>
 
 _ASM_FILE_PROLOGUE
 
 #if defined(CONFIG_SW_VECTOR_RELAY)
 
 GDATA(_vector_table_pointer)
-GDATA(_main_stack)
+GDATA(z_main_stack)
 
 SECTION_FUNC(vector_relay_handler, __vector_relay_handler)
 	mrs	r0, ipsr;
@@ -54,9 +52,9 @@ SECTION_FUNC(vector_relay_handler, __vector_relay_handler)
 GTEXT(__vector_relay_handler)
 
 SECTION_FUNC(vector_relay_table, __vector_relay_table)
-	.word _main_stack + CONFIG_MAIN_STACK_SIZE
+	.word z_main_stack + CONFIG_MAIN_STACK_SIZE
 
-	.word __reset
+	.word z_arm_reset
 
 	.word __vector_relay_handler	/* nmi */
 	.word __vector_relay_handler	/* hard fault */

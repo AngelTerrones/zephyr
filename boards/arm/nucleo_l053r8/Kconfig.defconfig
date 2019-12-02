@@ -1,9 +1,7 @@
-# Kconfig - STM32 Nucleo-64 development board with STM32L053R8 MCU
-#
+# STM32 Nucleo-64 development board with STM32L053R8 MCU
+
 # Copyright (c) 2018 Anthony Kreft <anthony.kreft@gmail.com>
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 if BOARD_NUCLEO_L053R8
 
@@ -12,7 +10,7 @@ config BOARD
 
 if UART_CONSOLE
 
-config UART_STM32_PORT_2
+config UART_2
 	default y
 
 endif # UART_CONSOLE

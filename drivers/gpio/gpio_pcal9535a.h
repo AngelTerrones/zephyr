@@ -8,13 +8,13 @@
  * @file Header file for the PCAL9535A driver.
  */
 
-#ifndef _GPIO_PCAL9535A_H_
-#define _GPIO_PCAL9535A_H_
+#ifndef ZEPHYR_DRIVERS_GPIO_GPIO_PCAL9535A_H_
+#define ZEPHYR_DRIVERS_GPIO_GPIO_PCAL9535A_H_
 
 #include <kernel.h>
 
-#include <gpio.h>
-#include <i2c.h>
+#include <drivers/gpio.h>
+#include <drivers/i2c.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,7 +44,7 @@ struct gpio_pcal9535a_drv_data {
 	struct device *i2c_master;
 
 	/**
-	 * Specify polarity inversion of pin. This is used for ouput as
+	 * Specify polarity inversion of pin. This is used for output as
 	 * the polarity inversion registers on chip affects inputs only.
 	 */
 	u32_t out_pol_inv;
@@ -64,4 +64,4 @@ struct gpio_pcal9535a_drv_data {
 }
 #endif
 
-#endif /* _GPIO_PCAL9535A_H_ */
+#endif /* ZEPHYR_DRIVERS_GPIO_GPIO_PCAL9535A_H_ */

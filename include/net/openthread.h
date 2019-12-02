@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __NET_OPENTHREAD_H_
-#define __NET_OPENTHREAD_H_
+#ifndef ZEPHYR_INCLUDE_NET_OPENTHREAD_H_
+#define ZEPHYR_INCLUDE_NET_OPENTHREAD_H_
 
 #include <kernel.h>
 
 #include <net/net_if.h>
 
-#include <openthread/openthread.h>
+#include <openthread/instance.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,10 +30,12 @@ struct openthread_context {
 	struct pkt_list_elem pkt_list[CONFIG_OPENTHREAD_PKT_LIST_SIZE];
 };
 
+k_tid_t openthread_thread_id_get(void);
+
 #define OPENTHREAD_L2_CTX_TYPE struct openthread_context
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __NET_OPENTHREAD_H_ */
+#endif /* ZEPHYR_INCLUDE_NET_OPENTHREAD_H_ */

@@ -16,14 +16,16 @@
  */
 
 #include <zephyr.h>
-#include <misc/__assert.h>
+#include <sys/__assert.h>
 #include <ztest.h>
 
 #include <limits.h>
+#include <sys/types.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <zephyr/types.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* Recent GCC's are issuing a warning for the truncated strncpy()
  * below (the static source string is longer than the locally-defined
@@ -52,6 +54,16 @@ void test_limits(void)
 {
 
 	zassert_true((long_max + long_one == LONG_MIN), NULL);
+}
+
+static ssize_t foobar(void)
+{
+	return -1;
+}
+
+void test_ssize_t(void)
+{
+	zassert_true(foobar() < 0, NULL);
 }
 
 /**
@@ -83,8 +95,11 @@ volatile size_t size_of_long_variable = sizeof(long_variable);
 
 void test_stddef(void)
 {
-
+#ifdef CONFIG_64BIT
+	zassert_true((size_of_long_variable == 8), "sizeof");
+#else
 	zassert_true((size_of_long_variable == 4), "sizeof");
+#endif
 }
 
 /*
@@ -103,7 +118,7 @@ volatile u32_t unsigned_int = 0xffffff00;
 
 void test_stdint(void)
 {
-	zassert_true((unsigned_int + unsigned_byte + 1u == 0), NULL);
+	zassert_true((unsigned_int + unsigned_byte + 1u == 0U), NULL);
 
 }
 
@@ -123,7 +138,7 @@ char buffer[BUFSIZE];
 
 void test_memset(void)
 {
-	memset(buffer, 'a', BUFSIZE);
+	(void)memset(buffer, 'a', BUFSIZE);
 	zassert_true((buffer[0] == 'a'), "memset");
 	zassert_true((buffer[BUFSIZE - 1] == 'a'), "memset");
 }
@@ -136,8 +151,8 @@ void test_memset(void)
 
 void test_strlen(void)
 {
-	memset(buffer, '\0', BUFSIZE);
-	memset(buffer, 'b', 5); /* 5 is BUFSIZE / 2 */
+	(void)memset(buffer, '\0', BUFSIZE);
+	(void)memset(buffer, 'b', 5); /* 5 is BUFSIZE / 2 */
 	zassert_equal(strlen(buffer), 5, "strlen");
 }
 
@@ -185,7 +200,7 @@ void test_strncmp(void)
 
 void test_strcpy(void)
 {
-	memset(buffer, '\0', BUFSIZE);
+	(void)memset(buffer, '\0', BUFSIZE);
 	strcpy(buffer, "10 chars!\0");
 
 	zassert_true((strcmp(buffer, "10 chars!\0") == 0), "strcpy");
@@ -201,7 +216,7 @@ void test_strncpy(void)
 {
 	int ret;
 
-	memset(buffer, '\0', BUFSIZE);
+	(void)memset(buffer, '\0', BUFSIZE);
 	strncpy(buffer, "This is over 10 characters", BUFSIZE);
 
 	/* Purposely different values */
@@ -221,7 +236,7 @@ void test_strchr(void)
 	char *rs = NULL;
 	int ret;
 
-	memset(buffer, '\0', BUFSIZE);
+	(void)memset(buffer, '\0', BUFSIZE);
 	strncpy(buffer, "Copy 10", BUFSIZE);
 
 	rs = strchr(buffer, '1');
@@ -232,6 +247,30 @@ void test_strchr(void)
 	ret = strncmp(rs, "10", 2);
 	zassert_true((ret == 0), "strchr");
 
+}
+
+/**
+ *
+ * @brief Test string prefix match functions
+ *
+ */
+
+void test_strxspn(void)
+{
+	const char *empty = "";
+	const char *cset = "abc";
+
+	zassert_true(strspn("", empty) == 0U, "strspn empty empty");
+	zassert_true(strcspn("", empty) == 0U, "strcspn empty empty");
+
+	zassert_true(strspn("abde", cset) == 2U, "strspn match");
+	zassert_true(strcspn("abde", cset) == 0U, "strcspn nomatch");
+
+	zassert_true(strspn("da", cset) == 0U, "strspn nomatch");
+	zassert_true(strcspn("da", cset) == 1U, "strcspn match");
+
+	zassert_true(strspn("abac", cset) == 4U, "strspn all");
+	zassert_true(strcspn("defg", cset) == 4U, "strcspn all");
 }
 
 /**
@@ -254,10 +293,37 @@ void test_memcmp(void)
 	zassert_true((ret != 0), "memcmp 5");
 }
 
+/**
+ *
+ * @brief Test binary search function
+ *
+ */
+
+int cmp_func(const void *a, const void *b)
+{
+	return (*(int *)a - *(int *)b);
+}
+
+void test_bsearch(void)
+{
+	void *result = NULL;
+	int arr[5] = { 2, 5, 20, 50, 60 };
+	size_t size = ARRAY_SIZE(arr);
+	int key = 30;
+
+	result = (int *)bsearch(&key, arr, size, sizeof(int), cmp_func);
+	zassert_is_null(result, "bsearch -key not found");
+
+	key = 60;
+	result = (int *)bsearch(&key, arr, size, sizeof(int), cmp_func);
+	zassert_not_null(result, "bsearch -key found");
+}
+
 void test_main(void)
 {
 	ztest_test_suite(test_c_lib,
 			 ztest_unit_test(test_limits),
+			 ztest_unit_test(test_ssize_t),
 			 ztest_unit_test(test_stdbool),
 			 ztest_unit_test(test_stddef),
 			 ztest_unit_test(test_stdint),
@@ -267,7 +333,9 @@ void test_main(void)
 			 ztest_unit_test(test_strncpy),
 			 ztest_unit_test(test_memset),
 			 ztest_unit_test(test_strlen),
-			 ztest_unit_test(test_strcmp)
+			 ztest_unit_test(test_strcmp),
+			 ztest_unit_test(test_strxspn),
+			 ztest_unit_test(test_bsearch)
 			 );
 	ztest_run_test_suite(test_c_lib);
 }

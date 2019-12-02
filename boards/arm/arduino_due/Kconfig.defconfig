@@ -1,8 +1,7 @@
-# Kconfig - Arduino Due Board configuration
-#
+# Arduino Due Board configuration
+
 # Copyright (c) 2017 Justin Watson
 # SPDX-License-Identifier: Apache-2.0
-#
 
 if BOARD_ARDUINO_DUE
 
@@ -11,19 +10,7 @@ config BOARD
 
 if GPIO
 
-config GPIO_ATMEL_SAM3
-	def_bool y
-
-config GPIO_ATMEL_SAM3_PORTA
-	default y
-
-config GPIO_ATMEL_SAM3_PORTB
-	default y
-
-config GPIO_ATMEL_SAM3_PORTC
-	default y
-
-config GPIO_ATMEL_SAM3_PORTD
+config GPIO_SAM
 	default y
 
 endif # GPIO
@@ -31,7 +18,7 @@ endif # GPIO
 if I2C
 
 config I2C_SAM_TWI
-	def_bool y
+	default y
 
 config I2C_0
 	default y

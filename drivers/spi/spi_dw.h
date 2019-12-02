@@ -6,10 +6,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __SPI_DW_H__
-#define __SPI_DW_H__
+#ifndef ZEPHYR_DRIVERS_SPI_SPI_DW_H_
+#define ZEPHYR_DRIVERS_SPI_SPI_DW_H_
 
-#include <spi.h>
+#include <string.h>
+#include <drivers/spi.h>
+
+#include "spi_context.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +23,7 @@ typedef void (*spi_dw_config_t)(void);
 /* Private structures */
 struct spi_dw_config {
 	u32_t regs;
+	u32_t clock_frequency;
 #ifdef CONFIG_CLOCK_CONTROL
 	const char *clock_name;
 	void *clock_data;
@@ -27,8 +31,6 @@ struct spi_dw_config {
 	spi_dw_config_t config_func;
 	u8_t op_modes;
 };
-
-#include "spi_context.h"
 
 struct spi_dw_data {
 #ifdef CONFIG_CLOCK_CONTROL
@@ -42,57 +44,50 @@ struct spi_dw_data {
 
 /* Helper macros */
 
-#ifdef SPI_DW_SPI_CLOCK
-#define SPI_DW_CLK_DIVIDER(ssi_clk_hz) \
-		((SPI_DW_SPI_CLOCK / ssi_clk_hz) & 0xFFFF)
-/* provision for soc.h providing a clock that is different than CPU clock */
-#else
-#define SPI_DW_CLK_DIVIDER(ssi_clk_hz) \
-		((CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC / ssi_clk_hz) & 0xFFFF)
-#endif
-
+#define SPI_DW_CLK_DIVIDER(clock_freq, ssi_clk_hz) \
+		((clock_freq / ssi_clk_hz) & 0xFFFF)
 
 #ifdef CONFIG_SPI_DW_ARC_AUX_REGS
-#define _REG_READ(__sz) sys_in##__sz
-#define _REG_WRITE(__sz) sys_out##__sz
-#define _REG_SET_BIT sys_io_set_bit
-#define _REG_CLEAR_BIT sys_io_clear_bit
-#define _REG_TEST_BIT sys_io_test_bit
+#define Z_REG_READ(__sz) sys_in##__sz
+#define Z_REG_WRITE(__sz) sys_out##__sz
+#define Z_REG_SET_BIT sys_io_set_bit
+#define Z_REG_CLEAR_BIT sys_io_clear_bit
+#define Z_REG_TEST_BIT sys_io_test_bit
 #else
-#define _REG_READ(__sz) sys_read##__sz
-#define _REG_WRITE(__sz) sys_write##__sz
-#define _REG_SET_BIT sys_set_bit
-#define _REG_CLEAR_BIT sys_clear_bit
-#define _REG_TEST_BIT sys_test_bit
+#define Z_REG_READ(__sz) sys_read##__sz
+#define Z_REG_WRITE(__sz) sys_write##__sz
+#define Z_REG_SET_BIT sys_set_bit
+#define Z_REG_CLEAR_BIT sys_clear_bit
+#define Z_REG_TEST_BIT sys_test_bit
 #endif /* CONFIG_SPI_DW_ARC_AUX_REGS */
 
 #define DEFINE_MM_REG_READ(__reg, __off, __sz)				\
 	static inline u32_t read_##__reg(u32_t addr)			\
 	{								\
-		return _REG_READ(__sz)(addr + __off);			\
+		return Z_REG_READ(__sz)(addr + __off);			\
 	}
 #define DEFINE_MM_REG_WRITE(__reg, __off, __sz)				\
 	static inline void write_##__reg(u32_t data, u32_t addr)	\
 	{								\
-		_REG_WRITE(__sz)(data, addr + __off);			\
+		Z_REG_WRITE(__sz)(data, addr + __off);			\
 	}
 
 #define DEFINE_SET_BIT_OP(__reg_bit, __reg_off, __bit)			\
 	static inline void set_bit_##__reg_bit(u32_t addr)		\
 	{								\
-		_REG_SET_BIT(addr + __reg_off, __bit);			\
+		Z_REG_SET_BIT(addr + __reg_off, __bit);			\
 	}
 
 #define DEFINE_CLEAR_BIT_OP(__reg_bit, __reg_off, __bit)		\
 	static inline void clear_bit_##__reg_bit(u32_t addr)		\
 	{								\
-		_REG_CLEAR_BIT(addr + __reg_off, __bit);		\
+		Z_REG_CLEAR_BIT(addr + __reg_off, __bit);		\
 	}
 
 #define DEFINE_TEST_BIT_OP(__reg_bit, __reg_off, __bit)			\
 	static inline int test_bit_##__reg_bit(u32_t addr)		\
 	{								\
-		return _REG_TEST_BIT(addr + __reg_off, __bit);		\
+		return Z_REG_TEST_BIT(addr + __reg_off, __bit);		\
 	}
 
 /* Common registers settings, bits etc... */
@@ -109,7 +104,12 @@ struct spi_dw_data {
 #define DW_SPI_CTRLR0_SLV_OE_BIT	(10)
 #define DW_SPI_CTRLR0_SLV_OE		BIT(DW_SPI_CTRLR0_SLV_OE_BIT)
 
+#ifdef CONFIG_SOC_INTEL_S1000
+#define DW_SPI_CTRLR0_TMOD_SHIFT	(10)
+#else
 #define DW_SPI_CTRLR0_TMOD_SHIFT	(8)
+#endif
+
 #define DW_SPI_CTRLR0_TMOD_TX_RX	(0)
 #define DW_SPI_CTRLR0_TMOD_TX		(1 << DW_SPI_CTRLR0_TMOD_SHIFT)
 #define DW_SPI_CTRLR0_TMOD_RX		(2 << DW_SPI_CTRLR0_TMOD_SHIFT)
@@ -119,7 +119,7 @@ struct spi_dw_data {
 #define DW_SPI_CTRLR0_DFS_16(__bpw)	((__bpw) - 1)
 #define DW_SPI_CTRLR0_DFS_32(__bpw)	(((__bpw) - 1) << 16)
 
-#ifdef CONFIG_ARC
+#if defined(CONFIG_ARC) || defined(CONFIG_SOC_INTEL_S1000)
 #define DW_SPI_CTRLR0_DFS		DW_SPI_CTRLR0_DFS_16
 #else
 #define DW_SPI_CTRLR0_DFS		DW_SPI_CTRLR0_DFS_32
@@ -195,40 +195,32 @@ struct spi_dw_data {
 /*
  * Including the right register definition file
  * SoC SPECIFIC!
+ *
+ * The file included next uses the DEFINE_MM_REG macros above to
+ * declare functions.  In this situation we'll leave the containing
+ * extern "C" active in C++ compilations.
  */
-#ifdef CONFIG_SOC_QUARK_SE_C1000_SS
-#include "spi_dw_quark_se_ss_regs.h"
-#else
 #include "spi_dw_regs.h"
 
-#define _extra_clock_on(...)
-#define _extra_clock_off(...)
-
-#endif
-
-/* Interrupt mask
- * SoC SPECIFIC!
- */
-#if defined(CONFIG_SOC_QUARK_SE_C1000) || defined(CONFIG_SOC_QUARK_SE_C1000_SS)
-#ifdef CONFIG_ARC
-#define _INT_UNMASK     INT_ENABLE_ARC
-#else
-#define _INT_UNMASK	INT_UNMASK_IA
-#endif
-
-#define _spi_int_unmask(__mask)						\
-	sys_write32(sys_read32(__mask) & _INT_UNMASK, __mask)
-#else
-#define _spi_int_unmask(...)
-#endif /* CONFIG_SOC_QUARK_SE_C1000 || CONFIG_SOC_QUARK_SE_C1000_SS */
+#define z_extra_clock_on(...)
+#define z_extra_clock_off(...)
 
 /* Based on those macros above, here are common helpers for some registers */
-DEFINE_MM_REG_WRITE(baudr, DW_SPI_REG_BAUDR, 16)
+
 DEFINE_MM_REG_READ(txflr, DW_SPI_REG_TXFLR, 32)
 DEFINE_MM_REG_READ(rxflr, DW_SPI_REG_RXFLR, 32)
+
+#ifdef CONFIG_SPI_DW_ACCESS_WORD_ONLY
+DEFINE_MM_REG_WRITE(baudr, DW_SPI_REG_BAUDR, 32)
+DEFINE_MM_REG_WRITE(imr, DW_SPI_REG_IMR, 32)
+DEFINE_MM_REG_READ(imr, DW_SPI_REG_IMR, 32)
+DEFINE_MM_REG_READ(isr, DW_SPI_REG_ISR, 32)
+#else
+DEFINE_MM_REG_WRITE(baudr, DW_SPI_REG_BAUDR, 16)
 DEFINE_MM_REG_WRITE(imr, DW_SPI_REG_IMR, 8)
 DEFINE_MM_REG_READ(imr, DW_SPI_REG_IMR, 8)
 DEFINE_MM_REG_READ(isr, DW_SPI_REG_ISR, 8)
+#endif
 
 DEFINE_SET_BIT_OP(ssienr, DW_SPI_REG_SSIENR, DW_SPI_SSIENR_SSIEN_BIT)
 DEFINE_CLEAR_BIT_OP(ssienr, DW_SPI_REG_SSIENR, DW_SPI_SSIENR_SSIEN_BIT)
@@ -237,9 +229,7 @@ DEFINE_TEST_BIT_OP(sr_busy, DW_SPI_REG_SR, DW_SPI_SR_BUSY_BIT)
 
 #ifdef CONFIG_CLOCK_CONTROL
 
-#include <string.h>
-
-static inline int _clock_config(struct device *dev)
+static inline int clock_config(struct device *dev)
 {
 	const struct spi_dw_config *info = dev->config->config_info;
 	struct spi_dw_data *spi = dev->driver_data;
@@ -257,7 +247,7 @@ static inline int _clock_config(struct device *dev)
 	return 0;
 }
 
-static inline void _clock_on(struct device *dev)
+static inline void clock_on(struct device *dev)
 {
 	struct spi_dw_data *spi = dev->driver_data;
 
@@ -267,10 +257,10 @@ static inline void _clock_on(struct device *dev)
 		clock_control_on(spi->clock, info->clock_data);
 	}
 
-	_extra_clock_on(dev);
+	extra_clock_on(dev);
 }
 
-static inline void _clock_off(struct device *dev)
+static inline void clock_off(struct device *dev)
 {
 	struct spi_dw_data *spi = dev->driver_data;
 
@@ -280,15 +270,17 @@ static inline void _clock_off(struct device *dev)
 		clock_control_off(spi->clock, info->clock_data);
 	}
 
-	_extra_clock_off(dev);
+	extra_clock_off(dev);
 }
-#else
-#define _clock_config(...)
-#define _clock_on(...)
-#define _clock_off(...)
+
+#else /* CONFIG_CLOCK_CONTROL */
+#define clock_config(...)
+#define clock_on(...)
+#define clock_off(...)
 #endif /* CONFIG_CLOCK_CONTROL */
 
 #ifdef __cplusplus
 }
 #endif
-#endif /* __SPI_DW_H__ */
+
+#endif /* ZEPHYR_DRIVERS_SPI_SPI_DW_H_ */

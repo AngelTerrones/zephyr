@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __DRIVERS_CONSOLE_CONSOLE_H__
-#define __DRIVERS_CONSOLE_CONSOLE_H__
+#ifndef ZEPHYR_INCLUDE_DRIVERS_CONSOLE_CONSOLE_H_
+#define ZEPHYR_INCLUDE_DRIVERS_CONSOLE_CONSOLE_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,8 +19,8 @@ extern "C" {
  * Recorded line must be NULL terminated.
  */
 struct console_input {
-	/** FIFO uses first 4 bytes itself, reserve space */
-	int _unused;
+	/** FIFO uses first word itself, reserve space */
+	intptr_t _unused;
 	/** Whether this is an mcumgr command */
 	u8_t is_mcumgr : 1;
 	/** Buffer where the input line is recorded */
@@ -48,4 +48,4 @@ typedef void (*console_input_fn)(struct k_fifo *avail, struct k_fifo *lines,
 }
 #endif
 
-#endif /* __DRIVERS_CONSOLE_CONSOLE_H__ */
+#endif /* ZEPHYR_INCLUDE_DRIVERS_CONSOLE_CONSOLE_H_ */

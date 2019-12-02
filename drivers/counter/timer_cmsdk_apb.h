@@ -3,10 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef _DRIVERS_TIMER_CMSDK_AHB_
-#define _DRIVERS_TIMER_CMSDK_AHB_
+#ifndef ZEPHYR_DRIVERS_COUNTER_TIMER_CMSDK_APB_H_
+#define ZEPHYR_DRIVERS_COUNTER_TIMER_CMSDK_APB_H_
 
-#include <counter.h>
+#include <drivers/counter.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,4 +37,4 @@ struct timer_cmsdk_apb {
 }
 #endif
 
-#endif /* _DRIVERS_TIMER_CMSDK_AHB_ */
+#endif /* ZEPHYR_DRIVERS_COUNTER_TIMER_CMSDK_APB_H_ */

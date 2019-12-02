@@ -6,12 +6,9 @@
 
 #include <ztest.h>
 #include <irq_offload.h>
-
-/*macro definition*/
-#define STACK_SIZE 512
+#include "test_sched.h"
 
 /*local variables*/
-static K_THREAD_STACK_DEFINE(tstack, STACK_SIZE);
 static struct k_thread tdata;
 static struct k_sem end_sema;
 
@@ -75,14 +72,14 @@ void test_sched_is_preempt_thread(void)
 	/*create preempt thread*/
 	k_tid_t tid = k_thread_create(&tdata, tstack, STACK_SIZE,
 				      tpreempt_ctx, NULL, NULL, NULL,
-				      K_PRIO_PREEMPT(1), 0, 0);
+				      K_PRIO_PREEMPT(1), 0, K_NO_WAIT);
 	k_sem_take(&end_sema, K_FOREVER);
 	k_thread_abort(tid);
 
 	/*create coop thread*/
 	tid = k_thread_create(&tdata, tstack, STACK_SIZE,
 			      tcoop_ctx, NULL, NULL, NULL,
-			      K_PRIO_COOP(1), 0, 0);
+			      K_PRIO_COOP(1), 0, K_NO_WAIT);
 	k_sem_take(&end_sema, K_FOREVER);
 	k_thread_abort(tid);
 

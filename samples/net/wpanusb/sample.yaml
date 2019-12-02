@@ -1,8 +1,10 @@
 sample:
-  description: TBD
-  name: TBD
+  description: Test wpanusb sample
+  name: wpanusb
+common:
+  harness: net
+  tags: net ieee802154 usb
 tests:
-  test_15_4:
-    harness: net
-    depends_on: ieee802154 usb_device
-    tags: net ieee802154 usb
+  sample.net.wpanusb_frdm_cr20a:
+    extra_args: SHIELD=frdm_cr20a
+    platform_whitelist: frdm_k64f

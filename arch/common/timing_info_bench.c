@@ -4,25 +4,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <kernel.h>
+#include <kernel_internal.h>
 
-/* #include <kernel_structs.h> */
-
-u64_t  __start_swap_time;
-u64_t  __end_swap_time;
-u64_t  __start_intr_time;
-u64_t  __end_intr_time;
-u64_t  __start_tick_time;
-u64_t  __end_tick_time;
-u64_t  __end_drop_to_usermode_time;
+u64_t  arch_timing_swap_start;
+u64_t  arch_timing_swap_end;
+u64_t  arch_timing_irq_start;
+u64_t  arch_timing_irq_end;
+u64_t  arch_timing_tick_start;
+u64_t  arch_timing_tick_end;
+u64_t  arch_timing_enter_user_mode_end;
 
 /* location of the time stamps*/
-u32_t __read_swap_end_time_value;
-u64_t __common_var_swap_end_time;
+u32_t arch_timing_value_swap_end;
+u64_t arch_timing_value_swap_common;
+u64_t arch_timing_value_swap_temp;
 
-#if CONFIG_ARM
-#include <arch/arm/cortex_m/cmsis.h>
-#endif
 #ifdef CONFIG_NRF_RTC_TIMER
+#include <nrfx.h>
 
 /* To get current count of timer, first 1 need to be written into
  * Capture Register and Current Count will be copied into corresponding
@@ -35,11 +33,12 @@ u64_t __common_var_swap_end_time;
 
 #elif CONFIG_X86
 #define TIMING_INFO_PRE_READ()
-#define TIMING_INFO_OS_GET_TIME()      (_tsc_read())
+#define TIMING_INFO_OS_GET_TIME()      (z_tsc_read())
 #define TIMING_INFO_GET_TIMER_VALUE()  (TIMING_INFO_OS_GET_TIME())
 #define SUBTRACT_CLOCK_CYCLES(val)     (val)
 
 #elif CONFIG_ARM
+#include <arch/arm/cortex_m/cmsis.h>
 #define TIMING_INFO_PRE_READ()
 #define TIMING_INFO_OS_GET_TIME()      (k_cycle_get_32())
 #define TIMING_INFO_GET_TIMER_VALUE()  (SysTick->VAL)
@@ -48,15 +47,8 @@ u64_t __common_var_swap_end_time;
 #elif CONFIG_ARC
 #define TIMING_INFO_PRE_READ()
 #define TIMING_INFO_OS_GET_TIME()     (k_cycle_get_32())
-#define TIMING_INFO_GET_TIMER_VALUE() (_arc_v2_aux_reg_read(_ARC_V2_TMR0_COUNT))
+#define TIMING_INFO_GET_TIMER_VALUE() (z_arc_v2_aux_reg_read(_ARC_V2_TMR0_COUNT))
 #define SUBTRACT_CLOCK_CYCLES(val)    ((u32_t)val)
-
-#elif CONFIG_XTENSA
-#include <xtensa_timer.h>
-#define TIMING_INFO_PRE_READ()
-#define TIMING_INFO_OS_GET_TIME()      (k_cycle_get_32())
-#define TIMING_INFO_GET_TIMER_VALUE()  (k_cycle_get_32())
-#define SUBTRACT_CLOCK_CYCLES(val)     ((u32_t)val)
 
 #elif CONFIG_NIOS2
 #include "altera_avalon_timer_regs.h"
@@ -77,33 +69,29 @@ u64_t __common_var_swap_end_time;
 	  (IORD_ALTERA_AVALON_TIMER_PERIODL(TIMER_0_BASE)))	\
 	 - ((u32_t)val))
 
-
-#elif CONFIG_RISCV32
+#else
 #define TIMING_INFO_PRE_READ()
 #define TIMING_INFO_OS_GET_TIME()      (k_cycle_get_32())
 #define TIMING_INFO_GET_TIMER_VALUE()  (k_cycle_get_32())
 #define SUBTRACT_CLOCK_CYCLES(val)     ((u32_t)val)
-
-#else
-/* Default case */
-#error "Benchmarks have not been implemented for this architecture"
 #endif	/* CONFIG_NRF_RTC_TIMER */
 
 
 void read_timer_start_of_swap(void)
 {
-	if (__read_swap_end_time_value == 1) {
+	if (arch_timing_value_swap_end == 1U) {
 		TIMING_INFO_PRE_READ();
-		__start_swap_time = (u32_t) TIMING_INFO_OS_GET_TIME();
+		arch_timing_swap_start = (u32_t) TIMING_INFO_OS_GET_TIME();
 	}
 }
 
 void read_timer_end_of_swap(void)
 {
-	if (__read_swap_end_time_value == 1) {
+	if (arch_timing_value_swap_end == 1U) {
 		TIMING_INFO_PRE_READ();
-		__read_swap_end_time_value = 2;
-		__common_var_swap_end_time = (u64_t)TIMING_INFO_OS_GET_TIME();
+		arch_timing_value_swap_end = 2U;
+		arch_timing_value_swap_common =
+			(u64_t)TIMING_INFO_OS_GET_TIME();
 	}
 }
 
@@ -113,29 +101,29 @@ void read_timer_end_of_swap(void)
 void read_timer_start_of_isr(void)
 {
 	TIMING_INFO_PRE_READ();
-	__start_intr_time  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
+	arch_timing_irq_start  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
 }
 
 void read_timer_end_of_isr(void)
 {
 	TIMING_INFO_PRE_READ();
-	__end_intr_time  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
+	arch_timing_irq_end  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
 }
 
 void read_timer_start_of_tick_handler(void)
 {
 	TIMING_INFO_PRE_READ();
-	__start_tick_time  = (u32_t)TIMING_INFO_GET_TIMER_VALUE();
+	arch_timing_tick_start  = (u32_t)TIMING_INFO_GET_TIMER_VALUE();
 }
 
 void read_timer_end_of_tick_handler(void)
 {
 	TIMING_INFO_PRE_READ();
-	 __end_tick_time  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
+	 arch_timing_tick_end  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
 }
 
 void read_timer_end_of_userspace_enter(void)
 {
 	TIMING_INFO_PRE_READ();
-	__end_drop_to_usermode_time  = (u32_t) TIMING_INFO_GET_TIMER_VALUE();
+	arch_timing_enter_user_mode_end = (u32_t)TIMING_INFO_GET_TIMER_VALUE();
 }

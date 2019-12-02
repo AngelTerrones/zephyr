@@ -5,10 +5,21 @@ arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
+  - xtools
 ram: 12
+flash: 64
 testing:
   ignore_tags:
     - bluetooth
     - net
 supported:
+  - arduino_gpio
+  - arduino_i2c
+  - arduino_spi
+  - gpio
+  - i2c
+  - spi
   - pwm
+  - watchdog
+  - counter
+  - nvs

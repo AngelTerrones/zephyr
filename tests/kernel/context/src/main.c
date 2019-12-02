@@ -24,13 +24,14 @@
 #include <kernel_structs.h>
 #include <arch/cpu.h>
 #include <irq_offload.h>
+#include <sys_clock.h>
 
 /*
- * Include board.h from platform to get IRQ number.
+ * Include soc.h from platform to get IRQ number.
  * NOTE: Cortex-M does not need IRQ numbers
  */
-#if !defined(CONFIG_CPU_CORTEX_M)
-#include <board.h>
+#if !defined(CONFIG_CPU_CORTEX_M) && !defined(CONFIG_XTENSA)
+#include <soc.h>
 #endif
 
 #define THREAD_STACKSIZE    (512 + CONFIG_TEST_EXTRA_STACKSIZE)
@@ -47,25 +48,27 @@
  * is not defined in platform, generate an error
  */
 #if defined(CONFIG_HPET_TIMER)
-#define TICK_IRQ CONFIG_HPET_TIMER_IRQ
+#define TICK_IRQ DT_INST_0_INTEL_HPET_IRQ_0
+#elif defined(CONFIG_APIC_TIMER)
+#define TICK_IRQ CONFIG_APIC_TIMER_IRQ
 #elif defined(CONFIG_LOAPIC_TIMER)
-#if defined(CONFIG_LOAPIC)
 #define TICK_IRQ CONFIG_LOAPIC_TIMER_IRQ
-#else
-/* MVIC case */
-#define TICK_IRQ CONFIG_MVIC_TIMER_IRQ
-#endif
 #elif defined(CONFIG_XTENSA)
-#include <xtensa_timer.h>
-#define TICK_IRQ XT_TIMER_INTNUM
+#define TICK_IRQ UTIL_CAT(XCHAL_TIMER,		\
+			  UTIL_CAT(CONFIG_XTENSA_TIMER_ID, _INTERRUPT))
+
 #elif defined(CONFIG_ALTERA_AVALON_TIMER)
 #define TICK_IRQ TIMER_0_IRQ
 #elif defined(CONFIG_ARCV2_TIMER)
 #define TICK_IRQ IRQ_TIMER0
-#elif defined(CONFIG_PULPINO_TIMER)
-#define TICK_IRQ PULP_TIMER_A_CMP_IRQ
 #elif defined(CONFIG_RISCV_MACHINE_TIMER)
 #define TICK_IRQ RISCV_MACHINE_TIMER_IRQ
+#elif defined(CONFIG_LITEX_TIMER)
+#define TICK_IRQ DT_LITEX_TIMER0_E0002800_IRQ_0
+#elif defined(CONFIG_RV32M1_LPTMR_TIMER)
+#define TICK_IRQ DT_OPENISA_RV32M1_LPTMR_SYSTEM_LPTMR_IRQ_0
+#elif defined(CONFIG_XLNX_PSTTC_TIMER)
+#define TICK_IRQ DT_INST_0_CDNS_TTC_IRQ_0
 #elif defined(CONFIG_CPU_CORTEX_M)
 /*
  * The Cortex-M use the SYSTICK exception for the system timer, which is
@@ -85,18 +88,15 @@
 #error Timer type is not defined for this platform
 #endif
 
-/* Nios II and RISCV32 without CONFIG_RISCV_HAS_CPU_IDLE
+/* Nios II and RISCV without CONFIG_RISCV_HAS_CPU_IDLE
  * do have a power saving instruction, so k_cpu_idle() returns immediately
  */
 #if !defined(CONFIG_NIOS2) && \
-	(!defined(CONFIG_RISCV32) || defined(CONFIG_RISCV_HAS_CPU_IDLE))
+	(!defined(CONFIG_RISCV) || defined(CONFIG_RISCV_HAS_CPU_IDLE))
 #define HAS_POWERSAVE_INSTRUCTION
 #endif
 
 
-
-extern u32_t _tick_get_32(void);
-extern s64_t _tick_get(void);
 
 typedef struct {
 	int command;            /* command to process   */
@@ -227,7 +227,16 @@ void irq_enable_wrapper(int irq)
 	irq_enable(irq);
 }
 
-#ifdef HAS_POWERSAVE_INSTRUCTION
+#if defined(CONFIG_TICKLESS_KERNEL)
+static void test_kernel_cpu_idle(void)
+{
+	ztest_test_skip();
+}
+static void test_kernel_cpu_idle_atomic(void)
+{
+	ztest_test_skip();
+}
+#elif defined(HAS_POWERSAVE_INSTRUCTION)
 static void _test_kernel_cpu_idle(int atomic)
 {
 	int tms, tms2;;         /* current time in millisecond */
@@ -237,7 +246,7 @@ static void _test_kernel_cpu_idle(int atomic)
 	tms = k_uptime_get_32();
 	while (tms == k_uptime_get_32()) {
 #if defined(CONFIG_ARCH_POSIX)
-		posix_halt_cpu(); /*Sleep until next IRQ*/
+		k_busy_wait(50);
 #endif
 	}
 
@@ -251,7 +260,7 @@ static void _test_kernel_cpu_idle(int atomic)
 			k_cpu_idle();
 		}
 		/* calculating milliseconds per tick*/
-		tms += __ticks_to_ms(1);
+		tms += k_ticks_to_ms_floor64(1);
 		tms2 = k_uptime_get_32();
 		zassert_false(tms2 < tms, "Bad ms per tick value computed,"
 			      "got %d which is less than %d\n",
@@ -310,15 +319,15 @@ static void _test_kernel_interrupts(disable_int_func disable_int,
 	int imask;
 
 	/* Align to a "tick boundary" */
-	tick = _tick_get_32();
-	while (_tick_get_32() == tick) {
+	tick = z_tick_get_32();
+	while (z_tick_get_32() == tick) {
 #if defined(CONFIG_ARCH_POSIX)
 		k_busy_wait(1000);
 #endif
 	}
 
 	tick++;
-	while (_tick_get_32() == tick) {
+	while (z_tick_get_32() == tick) {
 #if defined(CONFIG_ARCH_POSIX)
 		k_busy_wait(1000);
 #endif
@@ -335,15 +344,15 @@ static void _test_kernel_interrupts(disable_int_func disable_int,
 	count <<= 4;
 
 	imask = disable_int(irq);
-	tick = _tick_get_32();
+	tick = z_tick_get_32();
 	for (i = 0; i < count; i++) {
-		_tick_get_32();
+		z_tick_get_32();
 #if defined(CONFIG_ARCH_POSIX)
 		k_busy_wait(1000);
 #endif
 	}
 
-	tick2 = _tick_get_32();
+	tick2 = z_tick_get_32();
 
 	/*
 	 * Re-enable interrupts before returning (for both success and failure
@@ -351,18 +360,23 @@ static void _test_kernel_interrupts(disable_int_func disable_int,
 	 */
 	enable_int(imask);
 
-	zassert_equal(tick2, tick,
-		      "tick advanced with interrupts locked");
+	/* In TICKLESS, current time is retrieved from a hardware
+	 * counter and ticks DO advance with interrupts locked!
+	 */
+	if (!IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
+		zassert_equal(tick2, tick,
+			      "tick advanced with interrupts locked");
+	}
 
 	/* Now repeat with interrupts unlocked. */
 	for (i = 0; i < count; i++) {
-		_tick_get_32();
+		z_tick_get_32();
 #if defined(CONFIG_ARCH_POSIX)
 		k_busy_wait(1000);
 #endif
 	}
 
-	tick2 = _tick_get_32();
+	tick2 = z_tick_get_32();
 	zassert_not_equal(tick, tick2,
 			  "tick didn't advance as expected");
 }
@@ -380,6 +394,11 @@ static void _test_kernel_interrupts(disable_int_func disable_int,
  */
 static void test_kernel_interrupts(void)
 {
+	/* IRQ locks don't prevent ticks from advancing in tickless mode */
+	if (IS_ENABLED(CONFIG_TICKLESS_KERNEL)) {
+		return;
+	}
+
 	_test_kernel_interrupts(irq_lock_wrapper, irq_unlock_wrapper, -1);
 }
 
@@ -560,7 +579,7 @@ static void k_yield_entry(void *arg0, void *arg1, void *arg2)
 
 	k_thread_create(&thread_data2, thread_stack2, THREAD_STACKSIZE,
 			thread_helper, NULL, NULL, NULL,
-			K_PRIO_COOP(THREAD_PRIORITY - 1), 0, 0);
+			K_PRIO_COOP(THREAD_PRIORITY - 1), 0, K_NO_WAIT);
 
 	zassert_equal(thread_evidence, 0,
 		      "Helper created at higher priority ran prematurely.");
@@ -643,7 +662,7 @@ static void busy_wait_thread(void *mseconds, void *arg2, void *arg3)
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
-	usecs = (int)mseconds * 1000;
+	usecs = POINTER_TO_INT(mseconds) * 1000;
 
 	TC_PRINT("Thread busy waiting for %d usecs\n", usecs);
 	k_busy_wait(usecs);
@@ -669,7 +688,7 @@ static void busy_wait_thread(void *mseconds, void *arg2, void *arg3)
 static void thread_sleep(void *delta, void *arg2, void *arg3)
 {
 	s64_t timestamp;
-	int timeout = (int)delta;
+	int timeout = POINTER_TO_INT(delta);
 
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
@@ -680,7 +699,9 @@ static void thread_sleep(void *delta, void *arg2, void *arg3)
 	timestamp = k_uptime_get() - timestamp;
 	TC_PRINT(" thread back from sleep\n");
 
-	if (timestamp < timeout || timestamp > timeout + __ticks_to_ms(2)) {
+	int slop = MAX(k_ticks_to_ms_floor64(2), 1);
+
+	if (timestamp < timeout || timestamp > timeout + slop) {
 		TC_ERROR("timestamp out of range, got %d\n", (int)timestamp);
 		return;
 	}
@@ -691,7 +712,7 @@ static void thread_sleep(void *delta, void *arg2, void *arg3)
 /* a thread is started with a delay, then it reports that it ran via a fifo */
 static void delayed_thread(void *num, void *arg2, void *arg3)
 {
-	struct timeout_order *timeout = &timeouts[(int)num];
+	struct timeout_order *timeout = &timeouts[POINTER_TO_INT(num)];
 
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
@@ -718,8 +739,8 @@ static void test_busy_wait(void)
 
 	k_thread_create(&timeout_threads[0], timeout_stacks[0],
 			THREAD_STACKSIZE2, busy_wait_thread,
-			(void *)(intptr_t) timeout, NULL,
-			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, 0);
+			INT_TO_POINTER(timeout), NULL,
+			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, K_NO_WAIT);
 
 	rv = k_sem_take(&reply_timeout, timeout * 2);
 
@@ -745,8 +766,8 @@ static void test_k_sleep(void)
 
 	k_thread_create(&timeout_threads[0], timeout_stacks[0],
 			THREAD_STACKSIZE2, thread_sleep,
-			(void *)(intptr_t) timeout, NULL,
-			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, 0);
+			INT_TO_POINTER(timeout), NULL,
+			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, K_NO_WAIT);
 
 	rv = k_sem_take(&reply_timeout, timeout * 2);
 	zassert_equal(rv, 0, " *** thread timed out waiting for thread on "
@@ -759,8 +780,7 @@ static void test_k_sleep(void)
 		k_thread_create(&timeout_threads[i], timeout_stacks[i],
 				THREAD_STACKSIZE2,
 				delayed_thread,
-				(void *)i,
-				NULL, NULL,
+				INT_TO_POINTER(i), NULL, NULL,
 				K_PRIO_COOP(5), 0, timeouts[i].timeout);
 	}
 	for (i = 0; i < NUM_TIMEOUT_THREADS; i++) {
@@ -795,7 +815,7 @@ static void test_k_sleep(void)
 
 		id = k_thread_create(&timeout_threads[i], timeout_stacks[i],
 				     THREAD_STACKSIZE2, delayed_thread,
-				     (void *)i, NULL, NULL,
+				     INT_TO_POINTER(i), NULL, NULL,
 				     K_PRIO_COOP(5), 0, timeouts[i].timeout);
 
 		delayed_threads[i] = id;
@@ -868,7 +888,7 @@ void test_k_yield(void)
 
 	k_thread_create(&thread_data1, thread_stack1, THREAD_STACKSIZE,
 			k_yield_entry, NULL, NULL,
-			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, 0);
+			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, K_NO_WAIT);
 
 	zassert_equal(thread_evidence, 1,
 		      "Thread did not execute as expected!: %d", thread_evidence);
@@ -890,26 +910,27 @@ void test_kernel_thread(void)
 
 	k_thread_create(&thread_data3, thread_stack3, THREAD_STACKSIZE,
 			kernel_thread_entry, NULL, NULL,
-			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, 0);
+			NULL, K_PRIO_COOP(THREAD_PRIORITY), 0, K_NO_WAIT);
 
 }
 
 /*test case main entry*/
 void test_main(void)
 {
+	(void)test_k_sleep;
 
 	kernel_init_objects();
 
 	ztest_test_suite(context,
 			 ztest_unit_test(test_kernel_interrupts),
-			 ztest_unit_test(test_kernel_timer_interrupts),
+			 ztest_1cpu_unit_test(test_kernel_timer_interrupts),
 			 ztest_unit_test(test_kernel_ctx_thread),
-			 ztest_unit_test(test_busy_wait),
-			 ztest_unit_test(test_k_sleep),
+			 ztest_1cpu_unit_test(test_busy_wait),
+			 ztest_1cpu_unit_test(test_k_sleep),
 			 ztest_unit_test(test_kernel_cpu_idle_atomic),
 			 ztest_unit_test(test_kernel_cpu_idle),
-			 ztest_unit_test(test_k_yield),
-			 ztest_unit_test(test_kernel_thread)
+			 ztest_1cpu_unit_test(test_k_yield),
+			 ztest_1cpu_unit_test(test_kernel_thread)
 			 );
 	ztest_run_test_suite(context);
 }

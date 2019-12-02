@@ -11,8 +11,8 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <misc/printk.h>
-#include <misc/byteorder.h>
+#include <sys/printk.h>
+#include <sys/byteorder.h>
 #include <zephyr.h>
 
 #include <bluetooth/bluetooth.h>
@@ -20,9 +20,7 @@
 #include <bluetooth/conn.h>
 #include <bluetooth/uuid.h>
 #include <bluetooth/gatt.h>
-
-#include <gatt/dis.h>
-#include <gatt/bas.h>
+#include <bluetooth/services/bas.h>
 
 #define CSC_SUPPORTED_LOCATIONS		{ CSC_LOC_OTHER, \
 					  CSC_LOC_FRONT_WHEEL, \
@@ -78,8 +76,6 @@
 
 /* Cycling Speed and Cadence Service declaration */
 
-static struct bt_gatt_ccc_cfg csc_meas_ccc_cfg[BT_GATT_CCC_MAX];
-static struct bt_gatt_ccc_cfg ctrl_point_ccc_cfg[BT_GATT_CCC_MAX];
 static u32_t cwr; /* Cumulative Wheel Revolutions */
 static u8_t supported_locations[] = CSC_SUPPORTED_LOCATIONS;
 static u8_t sensor_location; /* Current Sensor Location */
@@ -202,11 +198,12 @@ static ssize_t write_ctrl_point(struct bt_conn *conn,
 	return len;
 }
 
-static struct bt_gatt_attr csc_attrs[] = {
+BT_GATT_SERVICE_DEFINE(csc_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_CSC),
 	BT_GATT_CHARACTERISTIC(BT_UUID_CSC_MEASUREMENT, BT_GATT_CHRC_NOTIFY,
 			       0x00, NULL, NULL, NULL),
-	BT_GATT_CCC(csc_meas_ccc_cfg, csc_meas_ccc_cfg_changed),
+	BT_GATT_CCC(csc_meas_ccc_cfg_changed,
+		    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CHARACTERISTIC(BT_UUID_SENSOR_LOCATION, BT_GATT_CHRC_READ,
 			       BT_GATT_PERM_READ, read_location, NULL,
 			       &sensor_location),
@@ -216,10 +213,9 @@ static struct bt_gatt_attr csc_attrs[] = {
 			       BT_GATT_CHRC_WRITE | BT_GATT_CHRC_INDICATE,
 			       BT_GATT_PERM_WRITE, NULL, write_ctrl_point,
 			       &sensor_location),
-	BT_GATT_CCC(ctrl_point_ccc_cfg, ctrl_point_ccc_cfg_changed),
-};
-
-static struct bt_gatt_service csc_svc = BT_GATT_SERVICE(csc_attrs);
+	BT_GATT_CCC(ctrl_point_ccc_cfg_changed,
+		    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+);
 
 struct sc_ctrl_point_ind {
 	u8_t op;
@@ -244,7 +240,7 @@ static void ctrl_point_ind(struct bt_conn *conn, u8_t req_op, u8_t status,
 		memcpy(ind->data, data, data_len);
 	}
 
-	bt_gatt_notify(conn, &csc_attrs[8], buf, sizeof(buf));
+	bt_gatt_notify(conn, &csc_svc.attrs[8], buf, sizeof(buf));
 }
 
 struct csc_measurement_nfy {
@@ -269,10 +265,10 @@ static void measurement_nfy(struct bt_conn *conn, u32_t cwr, u16_t lwet,
 	u8_t buf[sizeof(*nfy) +
 		    (cwr ? sizeof(struct wheel_rev_data_nfy) : 0) +
 		    (ccr ? sizeof(struct crank_rev_data_nfy) : 0)];
-	u16_t len = 0;
+	u16_t len = 0U;
 
 	nfy = (void *) buf;
-	nfy->flags = 0;
+	nfy->flags = 0U;
 
 	/* Send Wheel Revolution data is present */
 	if (cwr) {
@@ -297,7 +293,7 @@ static void measurement_nfy(struct bt_conn *conn, u32_t cwr, u16_t lwet,
 		memcpy(nfy->data + len, &data, sizeof(data));
 	}
 
-	bt_gatt_notify(NULL, &csc_attrs[1], buf, sizeof(buf));
+	bt_gatt_notify(NULL, &csc_svc.attrs[1], buf, sizeof(buf));
 }
 
 static u16_t lwet; /* Last Wheel Event Time */
@@ -313,13 +309,13 @@ static void csc_simulation(void)
 	/* Measurements don't have to be updated every second */
 	if (!(i % 2)) {
 		lwet += 1050 + rand % 50;
-		cwr += 2;
+		cwr += 2U;
 		nfy_wheel = true;
 	}
 
 	if (!(i % 3)) {
 		lcet += 1000 + rand % 50;
-		ccr += 1;
+		ccr += 1U;
 		nfy_crank = true;
 	}
 
@@ -337,9 +333,9 @@ static void csc_simulation(void)
 	 * every 64 seconds.
 	 */
 	if (!(i % 64)) {
-		lcet = 0;
-		lwet = 0;
-		i = 0;
+		lcet = 0U;
+		lwet = 0U;
+		i = 0U;
 	}
 
 	i++;
@@ -348,7 +344,7 @@ static void csc_simulation(void)
 static void connected(struct bt_conn *conn, u8_t err)
 {
 	if (err) {
-		printk("Connection failed (err %u)\n", err);
+		printk("Connection failed (err 0x%02x)\n", err);
 	} else {
 		printk("Connected\n");
 	}
@@ -356,7 +352,7 @@ static void connected(struct bt_conn *conn, u8_t err)
 
 static void disconnected(struct bt_conn *conn, u8_t reason)
 {
-	printk("Disconnected (reason %u)\n", reason);
+	printk("Disconnected (reason 0x%02x)\n", reason);
 }
 
 static struct bt_conn_cb conn_callbacks = {
@@ -378,10 +374,6 @@ static void bt_ready(int err)
 
 	printk("Bluetooth initialized\n");
 
-	bas_init();
-	dis_init(CONFIG_SOC, "ACME");
-	bt_gatt_service_register(&csc_svc);
-
 	err = bt_le_adv_start(BT_LE_ADV_CONN_NAME, ad, ARRAY_SIZE(ad), NULL, 0);
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
@@ -389,6 +381,19 @@ static void bt_ready(int err)
 	}
 
 	printk("Advertising successfully started\n");
+}
+
+static void bas_notify(void)
+{
+	u8_t battery_level = bt_gatt_bas_get_battery_level();
+
+	battery_level--;
+
+	if (!battery_level) {
+		battery_level = 100U;
+	}
+
+	bt_gatt_bas_set_battery_level(battery_level);
 }
 
 void main(void)

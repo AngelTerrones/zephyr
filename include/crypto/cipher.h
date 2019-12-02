@@ -14,13 +14,13 @@
  * as a part of ongoing development.
  */
 
-#ifndef __CRYPTO_CIPHER_H__
-#define __CRYPTO_CIPHER_H__
+#ifndef ZEPHYR_INCLUDE_CRYPTO_CIPHER_H_
+#define ZEPHYR_INCLUDE_CRYPTO_CIPHER_H_
 
 #include <device.h>
 #include <errno.h>
-#include <misc/util.h>
-#include <misc/__assert.h>
+#include <sys/util.h>
+#include <sys/__assert.h>
 #include "cipher_structs.h"
 
 /* The API a crypto driver should implement */
@@ -112,17 +112,17 @@ static inline int cipher_begin_session(struct device *dev,
 	ctx->ops.cipher_mode = mode;
 
 	flags = (ctx->flags & (CAP_OPAQUE_KEY_HNDL | CAP_RAW_KEY));
-	__ASSERT(flags != 0, "Keytype missing: RAW Key or OPAQUE handle");
+	__ASSERT(flags != 0U, "Keytype missing: RAW Key or OPAQUE handle");
 	__ASSERT(flags != (CAP_OPAQUE_KEY_HNDL | CAP_RAW_KEY),
 			 "conflicting options for keytype");
 
 	flags = (ctx->flags & (CAP_INPLACE_OPS | CAP_SEPARATE_IO_BUFS));
-	__ASSERT(flags != 0, "IO buffer type missing");
+	__ASSERT(flags != 0U, "IO buffer type missing");
 	__ASSERT(flags != (CAP_INPLACE_OPS | CAP_SEPARATE_IO_BUFS),
 			"conflicting options for IO buffer type");
 
 	flags = (ctx->flags & (CAP_SYNC_OPS | CAP_ASYNC_OPS));
-	__ASSERT(flags != 0, "sync/async type missing");
+	__ASSERT(flags != 0U, "sync/async type missing");
 	__ASSERT(flags != (CAP_SYNC_OPS |  CAP_ASYNC_OPS),
 			"conflicting options for sync/async");
 
@@ -268,4 +268,4 @@ static inline int cipher_ccm_op(struct cipher_ctx *ctx,
 	return ctx->ops.ccm_crypt_hndlr(ctx, pkt, nonce);
 }
 
-#endif /* __CRYPTO_CIPHER_H__ */
+#endif /* ZEPHYR_INCLUDE_CRYPTO_CIPHER_H_ */

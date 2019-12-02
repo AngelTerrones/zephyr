@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <kernel_structs.h>
+#include <kernel.h>
 #include <cmsis_os.h>
+#include <string.h>
 
 K_MEM_SLAB_DEFINE(cmsis_mutex_slab, sizeof(struct k_mutex),
 		CONFIG_CMSIS_MUTEX_MAX_COUNT, 4);
@@ -21,12 +22,12 @@ osMutexId osMutexCreate(const osMutexDef_t *mutex_def)
 		return NULL;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return NULL;
 	}
 
-	if (k_mem_slab_alloc(&cmsis_mutex_slab, (void **)&mutex, 100) == 0) {
-		memset(mutex, 0, sizeof(struct k_mutex));
+	if (k_mem_slab_alloc(&cmsis_mutex_slab, (void **)&mutex, K_MSEC(100)) == 0) {
+		(void)memset(mutex, 0, sizeof(struct k_mutex));
 	} else {
 		return NULL;
 	}
@@ -48,13 +49,13 @@ osStatus osMutexWait(osMutexId mutex_id, uint32_t timeout)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 
 	if (timeout == osWaitForever) {
 		status = k_mutex_lock(mutex, K_FOREVER);
-	} else if (timeout == 0) {
+	} else if (timeout == 0U) {
 		status = k_mutex_lock(mutex, K_NO_WAIT);
 	} else {
 		status = k_mutex_lock(mutex, timeout);
@@ -80,7 +81,7 @@ osStatus osMutexRelease(osMutexId mutex_id)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 
@@ -105,7 +106,7 @@ osStatus osMutexDelete(osMutexId mutex_id)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 

@@ -9,11 +9,14 @@
  */
 
 #include <init.h>
-#include <sensor.h>
-#include <misc/byteorder.h>
+#include <drivers/sensor.h>
+#include <sys/byteorder.h>
 #include <kernel.h>
+#include <logging/log.h>
 
 #include "bmg160.h"
+
+LOG_MODULE_REGISTER(BMG160, CONFIG_SENSOR_LOG_LEVEL);
 
 struct bmg160_device_data bmg160_data;
 
@@ -270,24 +273,24 @@ int bmg160_init(struct device *dev)
 {
 	const struct bmg160_device_config *cfg = dev->config->config_info;
 	struct bmg160_device_data *bmg160 = dev->driver_data;
-	u8_t chip_id = 0;
+	u8_t chip_id = 0U;
 	u16_t range_dps;
 
 	bmg160->i2c = device_get_binding((char *)cfg->i2c_port);
 	if (!bmg160->i2c) {
-		SYS_LOG_DBG("I2C master controller not found!");
+		LOG_DBG("I2C master controller not found!");
 		return -EINVAL;
 	}
 
 	k_sem_init(&bmg160->sem, 1, UINT_MAX);
 
 	if (bmg160_read_byte(dev, BMG160_REG_CHIPID, &chip_id) < 0) {
-		SYS_LOG_DBG("Failed to read chip id.");
+		LOG_DBG("Failed to read chip id.");
 		return -EIO;
 	}
 
 	if (chip_id != BMG160_CHIP_ID) {
-		SYS_LOG_DBG("Unsupported chip detected (0x%x)!", chip_id);
+		LOG_DBG("Unsupported chip detected (0x%x)!", chip_id);
 		return -ENODEV;
 	}
 
@@ -298,7 +301,7 @@ int bmg160_init(struct device *dev)
 
 	if (bmg160_write_byte(dev, BMG160_REG_RANGE,
 			      BMG160_DEFAULT_RANGE) < 0) {
-		SYS_LOG_DBG("Failed to set range.");
+		LOG_DBG("Failed to set range.");
 		return -EIO;
 	}
 
@@ -307,13 +310,13 @@ int bmg160_init(struct device *dev)
 	bmg160->scale = BMG160_RANGE_TO_SCALE(range_dps);
 
 	if (bmg160_write_byte(dev, BMG160_REG_BW, BMG160_DEFAULT_ODR) < 0) {
-		SYS_LOG_DBG("Failed to set sampling frequency.");
+		LOG_DBG("Failed to set sampling frequency.");
 		return -EIO;
 	}
 
 	/* disable interrupts */
 	if (bmg160_write_byte(dev, BMG160_REG_INT_EN0, 0) < 0) {
-		SYS_LOG_DBG("Failed to disable all interrupts.");
+		LOG_DBG("Failed to disable all interrupts.");
 		return -EIO;
 	}
 
@@ -325,15 +328,16 @@ int bmg160_init(struct device *dev)
 }
 
 const struct bmg160_device_config bmg160_config = {
-	.i2c_port = CONFIG_BMG160_I2C_PORT_NAME,
-	.i2c_addr = CONFIG_BMG160_I2C_ADDR,
+	.i2c_port = DT_INST_0_BOSCH_BMG160_BUS_NAME,
+	.i2c_addr = DT_INST_0_BOSCH_BMG160_BASE_ADDRESS,
 	.i2c_speed = BMG160_BUS_SPEED,
 #ifdef CONFIG_BMG160_TRIGGER
-	.gpio_port = CONFIG_BMG160_GPIO_PORT_NAME,
-	.int_pin = CONFIG_BMG160_INT_PIN,
+	.gpio_port = DT_INST_0_BOSCH_BMG160_INT_GPIOS_CONTROLLER,
+	.int_pin = DT_INST_0_BOSCH_BMG160_INT_GPIOS_PIN,
 #endif
 };
 
-DEVICE_AND_API_INIT(bmg160, CONFIG_BMG160_DRV_NAME, bmg160_init, &bmg160_data,
+DEVICE_AND_API_INIT(bmg160, DT_INST_0_BOSCH_BMG160_LABEL, bmg160_init,
+		    &bmg160_data,
 		    &bmg160_config, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,
 		    &bmg160_api);

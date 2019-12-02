@@ -6,24 +6,27 @@
  */
 
 #include <clock_control/stm32_clock_control.h>
-#include <clock_control.h>
-#include <misc/util.h>
+#include <drivers/clock_control.h>
+#include <sys/util.h>
 #include <kernel.h>
-#include <board.h>
+#include <soc.h>
 #include <errno.h>
-#include <i2c.h>
-#include "i2c-priv.h"
+#include <drivers/i2c.h>
 #include "i2c_ll_stm32.h"
 
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_I2C_LEVEL
-#include <logging/sys_log.h>
+#define LOG_LEVEL CONFIG_I2C_LOG_LEVEL
+#include <logging/log.h>
+LOG_MODULE_REGISTER(i2c_ll_stm32);
+
+#include "i2c-priv.h"
 
 int i2c_stm32_runtime_configure(struct device *dev, u32_t config)
 {
 	const struct i2c_stm32_config *cfg = DEV_CFG(dev);
 	struct i2c_stm32_data *data = DEV_DATA(dev);
 	I2C_TypeDef *i2c = cfg->i2c;
-	u32_t clock = 0;
+	u32_t clock = 0U;
+	int ret;
 
 #if defined(CONFIG_SOC_SERIES_STM32F3X) || defined(CONFIG_SOC_SERIES_STM32F0X)
 	LL_RCC_ClocksTypeDef rcc_clocks;
@@ -36,16 +39,23 @@ int i2c_stm32_runtime_configure(struct device *dev, u32_t config)
 	LL_RCC_GetSystemClocksFreq(&rcc_clocks);
 	clock = rcc_clocks.SYSCLK_Frequency;
 #else
-	clock_control_get_rate(device_get_binding(STM32_CLOCK_CONTROL_NAME),
-			(clock_control_subsys_t *) &cfg->pclken, &clock);
+	if (clock_control_get_rate(device_get_binding(STM32_CLOCK_CONTROL_NAME),
+			(clock_control_subsys_t *) &cfg->pclken, &clock) < 0) {
+		LOG_ERR("Failed call clock_control_get_rate");
+		return -EIO;
+	}
+
 #endif /* CONFIG_SOC_SERIES_STM32F3X) || CONFIG_SOC_SERIES_STM32F0X */
 
 	data->dev_config = config;
 
+	k_sem_take(&data->bus_mutex, K_FOREVER);
 	LL_I2C_Disable(i2c);
 	LL_I2C_SetMode(i2c, LL_I2C_MODE_I2C);
+	ret = stm32_i2c_configure_timing(dev, clock);
+	k_sem_give(&data->bus_mutex);
 
-	return stm32_i2c_configure_timing(dev, clock);
+	return ret;
 }
 
 #define OPERATION(msg) (((struct i2c_msg *) msg)->flags & I2C_MSG_RW_MASK)
@@ -53,10 +63,7 @@ int i2c_stm32_runtime_configure(struct device *dev, u32_t config)
 static int i2c_stm32_transfer(struct device *dev, struct i2c_msg *msg,
 			      u8_t num_msgs, u16_t slave)
 {
-#if defined(CONFIG_I2C_STM32_V1)
-	const struct i2c_stm32_config *cfg = DEV_CFG(dev);
-	I2C_TypeDef *i2c = cfg->i2c;
-#endif
+	struct i2c_stm32_data *data = DEV_DATA(dev);
 	struct i2c_msg *current, *next;
 	int ret = 0;
 
@@ -72,11 +79,6 @@ static int i2c_stm32_transfer(struct device *dev, struct i2c_msg *msg,
 	current->flags |= I2C_MSG_RESTART;
 
 	for (u8_t i = 1; i <= num_msgs; i++) {
-		/* Maximum length of a single message is 255 Bytes */
-		if (current->len > 255) {
-			ret = -EINVAL;
-			break;
-		}
 
 		if (i < num_msgs) {
 			next = current + 1;
@@ -110,9 +112,7 @@ static int i2c_stm32_transfer(struct device *dev, struct i2c_msg *msg,
 	}
 
 	/* Send out messages */
-#if defined(CONFIG_I2C_STM32_V1)
-	LL_I2C_Enable(i2c);
-#endif
+	k_sem_take(&data->bus_mutex, K_FOREVER);
 
 	current = msg;
 
@@ -123,32 +123,52 @@ static int i2c_stm32_transfer(struct device *dev, struct i2c_msg *msg,
 			next = current + 1;
 			next_msg_flags = &(next->flags);
 		}
+		do {
+			u32_t temp_len = current->len;
+			u8_t tmp_msg_flags = current->flags & ~I2C_MSG_RESTART;
+			u8_t tmp_next_msg_flags = next_msg_flags ?
+							*next_msg_flags : 0;
 
-		if ((current->flags & I2C_MSG_RW_MASK) == I2C_MSG_WRITE) {
-			ret = stm32_i2c_msg_write(dev, current, next_msg_flags,
-						  slave);
-		} else {
-			ret = stm32_i2c_msg_read(dev, current, next_msg_flags,
-						 slave);
-		}
+			if (current->len > 255) {
+				current->len = 255U;
+				current->flags &= ~I2C_MSG_STOP;
+				if (next_msg_flags) {
+					*next_msg_flags = current->flags &
+							  ~I2C_MSG_RESTART;
+				}
+			}
+			if ((current->flags & I2C_MSG_RW_MASK) ==
+								I2C_MSG_WRITE) {
+				ret = stm32_i2c_msg_write(dev, current,
+							  next_msg_flags,
+							  slave);
+			} else {
+				ret = stm32_i2c_msg_read(dev, current,
+							 next_msg_flags, slave);
+			}
 
-		if (ret < 0) {
-			break;
-		}
-
+			if (ret < 0) {
+				goto exit;
+			}
+			if (next_msg_flags) {
+				*next_msg_flags = tmp_next_msg_flags;
+			}
+			current->buf += current->len;
+			current->flags = tmp_msg_flags;
+			current->len = temp_len - current->len;
+		} while (current->len > 0);
 		current++;
 		num_msgs--;
-	};
-#if defined(CONFIG_I2C_STM32_V1)
-	LL_I2C_Disable(i2c);
-#endif
+	}
+exit:
+	k_sem_give(&data->bus_mutex);
 	return ret;
 }
 
 static const struct i2c_driver_api api_funcs = {
 	.configure = i2c_stm32_runtime_configure,
 	.transfer = i2c_stm32_transfer,
-#if defined(CONFIG_I2C_SLAVE) && defined(CONFIG_I2C_STM32_V2)
+#if defined(CONFIG_I2C_SLAVE)
 	.slave_register = i2c_stm32_slave_register,
 	.slave_unregister = i2c_stm32_slave_unregister,
 #endif
@@ -160,15 +180,25 @@ static int i2c_stm32_init(struct device *dev)
 	const struct i2c_stm32_config *cfg = DEV_CFG(dev);
 	u32_t bitrate_cfg;
 	int ret;
-#ifdef CONFIG_I2C_STM32_INTERRUPT
 	struct i2c_stm32_data *data = DEV_DATA(dev);
-
+#ifdef CONFIG_I2C_STM32_INTERRUPT
 	k_sem_init(&data->device_sync_sem, 0, UINT_MAX);
 	cfg->irq_config_func(dev);
 #endif
 
+	/*
+	 * initialize mutex used when multiple transfers
+	 * are taking place to guarantee that each one is
+	 * atomic and has exclusive access to the I2C bus.
+	 */
+	k_sem_init(&data->bus_mutex, 1, 1);
+
 	__ASSERT_NO_MSG(clock);
-	clock_control_on(clock, (clock_control_subsys_t *) &cfg->pclken);
+	if (clock_control_on(clock,
+		(clock_control_subsys_t *) &cfg->pclken) != 0) {
+		LOG_ERR("i2c: failure enabling clock");
+		return -EIO;
+	}
 
 #if defined(CONFIG_SOC_SERIES_STM32F3X) || defined(CONFIG_SOC_SERIES_STM32F0X)
 	/*
@@ -179,126 +209,114 @@ static int i2c_stm32_init(struct device *dev)
 
 	switch ((u32_t)cfg->i2c) {
 #ifdef CONFIG_I2C_1
-	case CONFIG_I2C_1_BASE_ADDRESS:
+	case DT_I2C_1_BASE_ADDRESS:
 		LL_RCC_SetI2CClockSource(LL_RCC_I2C1_CLKSOURCE_SYSCLK);
 		break;
 #endif /* CONFIG_I2C_1 */
 
 #if defined(CONFIG_SOC_SERIES_STM32F3X) && defined(CONFIG_I2C_2)
-	case CONFIG_I2C_2_BASE_ADDRESS:
+	case DT_I2C_2_BASE_ADDRESS:
 		LL_RCC_SetI2CClockSource(LL_RCC_I2C2_CLKSOURCE_SYSCLK);
 		break;
 #endif /* CONFIG_SOC_SERIES_STM32F3X && CONFIG_I2C_2 */
 
 #ifdef CONFIG_I2C_3
-	case CONFIG_I2C_3_BASE_ADDRESS:
+	case DT_I2C_3_BASE_ADDRESS:
 		LL_RCC_SetI2CClockSource(LL_RCC_I2C3_CLKSOURCE_SYSCLK);
 		break;
 #endif /* CONFIG_I2C_3 */
 	}
 #endif /* CONFIG_SOC_SERIES_STM32F3X) || CONFIG_SOC_SERIES_STM32F0X */
 
-	bitrate_cfg = _i2c_map_dt_bitrate(cfg->bitrate);
+	bitrate_cfg = i2c_map_dt_bitrate(cfg->bitrate);
 
 	ret = i2c_stm32_runtime_configure(dev, I2C_MODE_MASTER | bitrate_cfg);
 	if (ret < 0) {
-		SYS_LOG_ERR("i2c: failure initializing");
+		LOG_ERR("i2c: failure initializing");
 		return ret;
 	}
 
 	return 0;
 }
 
-#ifdef CONFIG_I2C_1
+/* Macros for I2C instance declaration */
 
 #ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_1(struct device *port);
-#endif
 
-static const struct i2c_stm32_config i2c_stm32_cfg_1 = {
-	.i2c = (I2C_TypeDef *)CONFIG_I2C_1_BASE_ADDRESS,
-	.pclken = {
-		.enr = LL_APB1_GRP1_PERIPH_I2C1,
-		.bus = STM32_CLOCK_BUS_APB1,
-	},
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-	.irq_config_func = i2c_stm32_irq_config_func_1,
-#endif
-	.bitrate = CONFIG_I2C_1_BITRATE,
-};
-
-static struct i2c_stm32_data i2c_stm32_dev_data_1;
-
-DEVICE_AND_API_INIT(i2c_stm32_1, CONFIG_I2C_1_NAME, &i2c_stm32_init,
-		    &i2c_stm32_dev_data_1, &i2c_stm32_cfg_1,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &api_funcs);
-
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_1(struct device *dev)
-{
 #ifdef CONFIG_I2C_STM32_COMBINED_INTERRUPT
-	IRQ_CONNECT(CONFIG_I2C_1_COMBINED_IRQ, CONFIG_I2C_1_COMBINED_IRQ_PRI,
-		   stm32_i2c_combined_isr, DEVICE_GET(i2c_stm32_1), 0);
-	irq_enable(CONFIG_I2C_1_COMBINED_IRQ);
+#define STM32_I2C_IRQ_CONNECT_AND_ENABLE(name)				\
+	do {								\
+		IRQ_CONNECT(DT_##name##_COMBINED_IRQ,			\
+			    DT_##name##_COMBINED_IRQ_PRI,		\
+			    stm32_i2c_combined_isr,			\
+			    DEVICE_GET(i2c_stm32_##name), 0);		\
+		irq_enable(DT_##name##_COMBINED_IRQ);			\
+	} while (0)
 #else
-	IRQ_CONNECT(CONFIG_I2C_1_EVENT_IRQ, CONFIG_I2C_1_EVENT_IRQ_PRI,
-		   stm32_i2c_event_isr, DEVICE_GET(i2c_stm32_1), 0);
-	irq_enable(CONFIG_I2C_1_EVENT_IRQ);
+#define STM32_I2C_IRQ_CONNECT_AND_ENABLE(name)				\
+	do {								\
+		IRQ_CONNECT(DT_##name##_EVENT_IRQ,			\
+			    DT_##name##_EVENT_IRQ_PRI,			\
+			    stm32_i2c_event_isr,			\
+			    DEVICE_GET(i2c_stm32_##name), 0);		\
+		irq_enable(DT_##name##_EVENT_IRQ);			\
+									\
+		IRQ_CONNECT(DT_##name##_ERROR_IRQ,			\
+			    DT_##name##_ERROR_IRQ_PRI,			\
+			    stm32_i2c_error_isr,			\
+			    DEVICE_GET(i2c_stm32_##name), 0);		\
+		irq_enable(DT_##name##_ERROR_IRQ);			\
+	} while (0)
+#endif /* CONFIG_I2C_STM32_COMBINED_INTERRUPT */
 
-	IRQ_CONNECT(CONFIG_I2C_1_ERROR_IRQ, CONFIG_I2C_1_ERROR_IRQ_PRI,
-		   stm32_i2c_error_isr, DEVICE_GET(i2c_stm32_1), 0);
-	irq_enable(CONFIG_I2C_1_ERROR_IRQ);
-#endif
+#define STM32_I2C_IRQ_HANDLER_DECL(name)				\
+static void i2c_stm32_irq_config_func_##name(struct device *dev)
+#define STM32_I2C_IRQ_HANDLER_FUNCTION(name)				\
+	.irq_config_func = i2c_stm32_irq_config_func_##name,
+#define STM32_I2C_IRQ_HANDLER(name)					\
+static void i2c_stm32_irq_config_func_##name(struct device *dev)	\
+{									\
+	STM32_I2C_IRQ_CONNECT_AND_ENABLE(name);				\
 }
-#endif
+#else
 
+#define STM32_I2C_IRQ_HANDLER_DECL(name)
+#define STM32_I2C_IRQ_HANDLER_FUNCTION(name)
+#define STM32_I2C_IRQ_HANDLER(name)
+
+#endif /* CONFIG_I2C_STM32_INTERRUPT */
+
+#define STM32_I2C_INIT(name)						\
+STM32_I2C_IRQ_HANDLER_DECL(name);					\
+									\
+static const struct i2c_stm32_config i2c_stm32_cfg_##name = {		\
+	.i2c = (I2C_TypeDef *)DT_##name##_BASE_ADDRESS,			\
+	.pclken = {							\
+		.enr = DT_##name##_CLOCK_BITS,				\
+		.bus = DT_##name##_CLOCK_BUS,				\
+	},								\
+	STM32_I2C_IRQ_HANDLER_FUNCTION(name)				\
+	.bitrate = DT_##name##_BITRATE,					\
+};									\
+									\
+static struct i2c_stm32_data i2c_stm32_dev_data_##name;			\
+									\
+DEVICE_AND_API_INIT(i2c_stm32_##name, DT_##name##_NAME,			\
+		    &i2c_stm32_init, &i2c_stm32_dev_data_##name,	\
+		    &i2c_stm32_cfg_##name,				\
+		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,	\
+		    &api_funcs);					\
+									\
+STM32_I2C_IRQ_HANDLER(name)
+
+/* I2C instances declaration */
+
+#ifdef CONFIG_I2C_1
+STM32_I2C_INIT(I2C_1);
 #endif /* CONFIG_I2C_1 */
 
 #ifdef CONFIG_I2C_2
-
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_2(struct device *port);
-#endif
-
-static const struct i2c_stm32_config i2c_stm32_cfg_2 = {
-	.i2c = (I2C_TypeDef *)CONFIG_I2C_2_BASE_ADDRESS,
-	.pclken = {
-		.enr = LL_APB1_GRP1_PERIPH_I2C2,
-		.bus = STM32_CLOCK_BUS_APB1,
-	},
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-	.irq_config_func = i2c_stm32_irq_config_func_2,
-#endif
-	.bitrate = CONFIG_I2C_2_BITRATE,
-};
-
-static struct i2c_stm32_data i2c_stm32_dev_data_2;
-
-DEVICE_AND_API_INIT(i2c_stm32_2, CONFIG_I2C_2_NAME, &i2c_stm32_init,
-		    &i2c_stm32_dev_data_2, &i2c_stm32_cfg_2,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &api_funcs);
-
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_2(struct device *dev)
-{
-#ifdef CONFIG_I2C_STM32_COMBINED_INTERRUPT
-	IRQ_CONNECT(CONFIG_I2C_2_COMBINED_IRQ, CONFIG_I2C_2_COMBINED_IRQ_PRI,
-		   stm32_i2c_combined_isr, DEVICE_GET(i2c_stm32_2), 0);
-	irq_enable(CONFIG_I2C_2_COMBINED_IRQ);
-#else
-	IRQ_CONNECT(CONFIG_I2C_2_EVENT_IRQ, CONFIG_I2C_2_EVENT_IRQ_PRI,
-		   stm32_i2c_event_isr, DEVICE_GET(i2c_stm32_2), 0);
-	irq_enable(CONFIG_I2C_2_EVENT_IRQ);
-
-	IRQ_CONNECT(CONFIG_I2C_2_ERROR_IRQ, CONFIG_I2C_2_ERROR_IRQ_PRI,
-		   stm32_i2c_error_isr, DEVICE_GET(i2c_stm32_2), 0);
-	irq_enable(CONFIG_I2C_2_ERROR_IRQ);
-#endif
-}
-#endif
-
+STM32_I2C_INIT(I2C_2);
 #endif /* CONFIG_I2C_2 */
 
 #ifdef CONFIG_I2C_3
@@ -307,42 +325,7 @@ static void i2c_stm32_irq_config_func_2(struct device *dev)
 #error "I2C_3 is not available on the platform that you selected"
 #endif /* I2C3_BASE */
 
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_3(struct device *port);
-#endif
-
-static const struct i2c_stm32_config i2c_stm32_cfg_3 = {
-	.i2c = (I2C_TypeDef *)CONFIG_I2C_3_BASE_ADDRESS,
-	.pclken = {
-		.enr = LL_APB1_GRP1_PERIPH_I2C3,
-		.bus = STM32_CLOCK_BUS_APB1,
-	},
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-	.irq_config_func = i2c_stm32_irq_config_func_3,
-#endif
-	.bitrate = CONFIG_I2C_3_BITRATE,
-};
-
-static struct i2c_stm32_data i2c_stm32_dev_data_3;
-
-DEVICE_AND_API_INIT(i2c_stm32_3, CONFIG_I2C_3_NAME, &i2c_stm32_init,
-		    &i2c_stm32_dev_data_3, &i2c_stm32_cfg_3,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &api_funcs);
-
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_3(struct device *dev)
-{
-	IRQ_CONNECT(CONFIG_I2C_3_EVENT_IRQ, CONFIG_I2C_3_EVENT_IRQ_PRI,
-		   stm32_i2c_event_isr, DEVICE_GET(i2c_stm32_3), 0);
-	irq_enable(CONFIG_I2C_3_EVENT_IRQ);
-
-	IRQ_CONNECT(CONFIG_I2C_3_ERROR_IRQ, CONFIG_I2C_3_ERROR_IRQ_PRI,
-		   stm32_i2c_error_isr, DEVICE_GET(i2c_stm32_3), 0);
-	irq_enable(CONFIG_I2C_3_ERROR_IRQ);
-}
-#endif
-
+STM32_I2C_INIT(I2C_3);
 #endif /* CONFIG_I2C_3 */
 
 #ifdef CONFIG_I2C_4
@@ -351,41 +334,15 @@ static void i2c_stm32_irq_config_func_3(struct device *dev)
 #error "I2C_4 is not available on the platform that you selected"
 #endif /* I2C4_BASE */
 
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_4(struct device *port);
-#endif
-
-static const struct i2c_stm32_config i2c_stm32_cfg_4 = {
-	.i2c = (I2C_TypeDef *)CONFIG_I2C_4_BASE_ADDRESS,
-	.pclken = {
-		.enr = LL_APB1_GRP2_PERIPH_I2C4,
-		.bus = STM32_CLOCK_BUS_APB1_2,
-	},
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-	.irq_config_func = i2c_stm32_irq_config_func_4,
-#endif
-	.bitrate = CONFIG_I2C_4_BITRATE,
-};
-
-static struct i2c_stm32_data i2c_stm32_dev_data_4;
-
-DEVICE_AND_API_INIT(i2c_stm32_4, CONFIG_I2C_4_NAME, &i2c_stm32_init,
-		    &i2c_stm32_dev_data_4, &i2c_stm32_cfg_4,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &api_funcs);
-
-#ifdef CONFIG_I2C_STM32_INTERRUPT
-static void i2c_stm32_irq_config_func_4(struct device *dev)
-{
-	IRQ_CONNECT(CONFIG_I2C_4_EVENT_IRQ, CONFIG_I2C_4_EVENT_IRQ_PRI,
-		   stm32_i2c_event_isr, DEVICE_GET(i2c_stm32_4), 0);
-	irq_enable(CONFIG_I2C_4_EVENT_IRQ);
-
-	IRQ_CONNECT(CONFIG_I2C_4_ERROR_IRQ, CONFIG_I2C_4_ERROR_IRQ_PRI,
-		   stm32_i2c_error_isr, DEVICE_GET(i2c_stm32_4), 0);
-	irq_enable(CONFIG_I2C_4_ERROR_IRQ);
-}
-#endif
-
+STM32_I2C_INIT(I2C_4);
 #endif /* CONFIG_I2C_4 */
 
+
+#ifdef CONFIG_I2C_5
+
+#ifndef I2C5_BASE
+#error "I2C_5 is not available on the platform that you selected"
+#endif /* I2C5_BASE */
+
+STM32_I2C_INIT(I2C_5);
+#endif /* CONFIG_I2C_5 */

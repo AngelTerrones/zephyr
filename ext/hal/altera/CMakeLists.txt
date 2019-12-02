@@ -24,18 +24,6 @@ if(CONFIG_ALTERA_AVALON_SYSID)
   add_subdirectory(drivers/altera_avalon_sysid/HAL/src)
 endif()
 
-if(CONFIG_ALTERA_AVALON_UART)
-  zephyr_include_directories(
-    drivers/altera_avalon_uart/inc
-    drivers/altera_avalon_uart/HAL/inc
-    drivers/altera_avalon_uart/LWHAL/inc
-    )
-  add_subdirectory(
-    drivers/altera_avalon_uart/HAL/src
-    drivers/altera_avalon_uart/LWHAL/src
-    )
-endif()
-
 if(CONFIG_UART_ALTERA_JTAG)
   zephyr_compile_definitions(ALTERA_AVALON_JTAG_UART_SMALL)
   zephyr_include_directories(
@@ -47,14 +35,6 @@ if(CONFIG_UART_ALTERA_JTAG)
     drivers/altera_avalon_jtag_uart/HAL/src
     drivers/altera_avalon_jtag_uart/LWHAL/src
     )
-endif()
-
-if(CONFIG_ALTERA_AVALON_SGDMA)
-  zephyr_include_directories(
-    drivers/altera_avalon_sgdma/inc
-    drivers/altera_avalon_sgdma/HAL/inc
-    )
-  add_subdirectory(drivers/altera_avalon_sgdma/HAL/src)
 endif()
 
 if(CONFIG_ALTERA_AVALON_MSGDMA)
@@ -73,30 +53,10 @@ if(CONFIG_ALTERA_AVALON_I2C)
   add_subdirectory(drivers/altera_avalon_i2c/HAL/src)
 endif()
 
-if(CONFIG_ALTERA_AVALON_SPI)
-  zephyr_include_directories(
-    drivers/altera_avalon_spi/inc
-    drivers/altera_avalon_spi/HAL/inc
-    )
-  add_subdirectory(drivers/altera_avalon_spi/HAL/src)
-endif()
-
-if(CONFIG_ALTERA_AVALON_EPCS)
-  zephyr_include_directories(
-    drivers/altera_epcq_controller/inc
-    drivers/altera_epcq_controller/HAL/inc
-    )
-  add_subdirectory(drivers/altera_epcq_controller/HAL/src)
-endif()
-
 if(CONFIG_ALTERA_AVALON_QSPI)
   zephyr_include_directories(
     drivers/altera_generic_qspi_controller2/inc
     drivers/altera_generic_qspi_controller2/HAL/inc
     )
-endif()
-
-if(CONFIG_ALTERA_AVALON_PIO)
-  zephyr_include_directories(drivers/altera_avalon_pio/inc)
 endif()
 

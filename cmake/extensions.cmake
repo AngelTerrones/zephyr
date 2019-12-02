@@ -1,5 +1,4 @@
-include(CheckCCompilerFlag)
-include(CheckCXXCompilerFlag)
+# SPDX-License-Identifier: Apache-2.0
 
 ########################################################
 # Table of contents
@@ -18,6 +17,7 @@ include(CheckCXXCompilerFlag)
 # 3.1. *_ifdef
 # 3.2. *_ifndef
 # 3.3. *_option compiler compatibility checks
+# 3.3.1 Toolchain integration
 # 3.4. Debugging CMake
 # 3.5. File system management
 
@@ -27,7 +27,7 @@ include(CheckCXXCompilerFlag)
 # 1.1. zephyr_*
 #
 # The following methods are for modifying the CMake library[0] called
-# "zephyr". zephyr is a catchall CMake library for source files that
+# "zephyr". zephyr is a catch-all CMake library for source files that
 # can be built purely with the include paths, defines, and other
 # compiler flags that all zephyr source files use.
 # [0] https://cmake.org/cmake/help/latest/manual/cmake-buildsystem.7.html
@@ -36,28 +36,40 @@ include(CheckCXXCompilerFlag)
 # zephyr_sources(
 #   random_esp32.c
 #   utils.c
-#   )
+# )
 #
 # Is short for:
 # target_sources(zephyr PRIVATE
 #   ${CMAKE_CURRENT_SOURCE_DIR}/random_esp32.c
 #   ${CMAKE_CURRENT_SOURCE_DIR}/utils.c
-#  )
+# )
+#
+# As a very high-level introduction here are two call graphs that are
+# purposely minimalistic and incomplete.
+#
+#  zephyr_library_cc_option()
+#           |
+#           v
+#  zephyr_library_compile_options()  -->  target_compile_options()
+#
+#
+#  zephyr_cc_option()           --->  target_cc_option()
+#                                          |
+#                                          v
+#  zephyr_cc_option_fallback()  --->  target_cc_option_fallback()
+#                                          |
+#                                          v
+#  zephyr_compile_options()     --->  target_compile_options()
+#
+
 
 # https://cmake.org/cmake/help/latest/command/target_sources.html
 function(zephyr_sources)
   foreach(arg ${ARGV})
-    if(IS_ABSOLUTE ${arg})
-      set(path ${arg})
-    else()
-      set(path ${CMAKE_CURRENT_SOURCE_DIR}/${arg})
-    endif()
-
-    if(IS_DIRECTORY ${path})
+    if(IS_DIRECTORY ${arg})
       message(FATAL_ERROR "zephyr_sources() was called on a directory")
     endif()
-
-    target_sources(zephyr PRIVATE ${path})
+    target_sources(zephyr PRIVATE ${arg})
   endforeach()
 endfunction()
 
@@ -304,6 +316,217 @@ macro(get_property_and_add_prefix result target property prefix)
   endforeach()
 endmacro()
 
+# 1.2 zephyr_library_*
+#
+# Zephyr libraries use CMake's library concept and a set of
+# assumptions about how zephyr code is organized to cut down on
+# boilerplate code.
+#
+# A Zephyr library can be constructed by the function zephyr_library
+# or zephyr_library_named. The constructors create a CMake library
+# with a name accessible through the variable ZEPHYR_CURRENT_LIBRARY.
+#
+# The variable ZEPHYR_CURRENT_LIBRARY should seldom be needed since
+# the zephyr libraries have methods that modify the libraries. These
+# methods have the signature: zephyr_library_<target-function>
+#
+# The methods are wrappers around the CMake target_* functions. See
+# https://cmake.org/cmake/help/latest/manual/cmake-commands.7.html for
+# documentation on the underlying target_* functions.
+#
+# The methods modify the CMake target_* API to reduce boilerplate;
+#  PRIVATE is assumed
+#  The target is assumed to be ZEPHYR_CURRENT_LIBRARY
+#
+# When a flag that is given through the zephyr_* API conflicts with
+# the zephyr_library_* API then precedence will be given to the
+# zephyr_library_* API. In other words, local configuration overrides
+# global configuration.
+
+# Constructor with a directory-inferred name
+macro(zephyr_library)
+  zephyr_library_get_current_dir_lib_name(${ZEPHYR_BASE} lib_name)
+  zephyr_library_named(${lib_name})
+endmacro()
+
+# Determines what the current directory's lib name would be according to the
+# provided base and writes it to the argument "lib_name"
+macro(zephyr_library_get_current_dir_lib_name base lib_name)
+  # Remove the prefix (/home/sebo/zephyr/driver/serial/CMakeLists.txt => driver/serial/CMakeLists.txt)
+  file(RELATIVE_PATH name ${base} ${CMAKE_CURRENT_LIST_FILE})
+
+  # Remove the filename (driver/serial/CMakeLists.txt => driver/serial)
+  get_filename_component(name ${name} DIRECTORY)
+
+  # Replace / with __ (driver/serial => driver__serial)
+  string(REGEX REPLACE "/" "__" name ${name})
+
+  set(${lib_name} ${name})
+endmacro()
+
+# Constructor with an explicitly given name.
+macro(zephyr_library_named name)
+  # This is a macro because we need add_library() to be executed
+  # within the scope of the caller.
+  set(ZEPHYR_CURRENT_LIBRARY ${name})
+  add_library(${name} STATIC "")
+
+  zephyr_append_cmake_library(${name})
+
+  target_link_libraries(${name} PUBLIC zephyr_interface)
+endmacro()
+
+# Provides amend functionality to a Zephyr library for out-of-tree usage.
+#
+# When called from a Zephyr module, the corresponding zephyr library defined
+# within Zephyr will be looked up.
+#
+# Note, in order to ensure correct library when amending, the folder structure in the
+# Zephyr module must resemble the structure used in Zephyr, as example:
+#
+# Example: to amend the zephyr library created in
+# ZEPHYR_BASE/drivers/entropy/CMakeLists.txt
+# add the following file:
+# ZEPHYR_MODULE/drivers/entropy/CMakeLists.txt
+# with content:
+# zephyr_library_amend()
+# zephyr_libray_add_sources(...)
+#
+macro(zephyr_library_amend)
+  # This is a macro because we need to ensure the ZEPHYR_CURRENT_LIBRARY and
+  # following zephyr_library_* calls are executed within the scope of the
+  # caller.
+  if(NOT ZEPHYR_CURRENT_MODULE_DIR)
+    message(FATAL_ERROR "Function only available for Zephyr modules.")
+  endif()
+
+  zephyr_library_get_current_dir_lib_name(${ZEPHYR_CURRENT_MODULE_DIR} lib_name)
+
+  set(ZEPHYR_CURRENT_LIBRARY ${lib_name})
+endmacro()
+
+function(zephyr_link_interface interface)
+  target_link_libraries(${interface} INTERFACE zephyr_interface)
+endfunction()
+
+#
+# zephyr_library versions of normal CMake target_<func> functions
+#
+function(zephyr_library_sources source)
+  target_sources(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${source} ${ARGN})
+endfunction()
+
+function(zephyr_library_include_directories)
+  target_include_directories(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${ARGN})
+endfunction()
+
+function(zephyr_library_link_libraries item)
+  target_link_libraries(${ZEPHYR_CURRENT_LIBRARY} PUBLIC ${item} ${ARGN})
+endfunction()
+
+function(zephyr_library_compile_definitions item)
+  target_compile_definitions(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${item} ${ARGN})
+endfunction()
+
+function(zephyr_library_compile_options item)
+  # The compiler is relied upon for sane behaviour when flags are in
+  # conflict. Compilers generally give precedence to flags given late
+  # on the command line. So to ensure that zephyr_library_* flags are
+  # placed late on the command line we create a dummy interface
+  # library and link with it to obtain the flags.
+  #
+  # Linking with a dummy interface library will place flags later on
+  # the command line than the the flags from zephyr_interface because
+  # zephyr_interface will be the first interface library that flags
+  # are taken from.
+
+  string(MD5 uniqueness ${item})
+  set(lib_name options_interface_lib_${uniqueness})
+
+  if (TARGET ${lib_name})
+    # ${item} already added, ignoring duplicate just like CMake does
+    return()
+  endif()
+
+  add_library(           ${lib_name} INTERFACE)
+  target_compile_options(${lib_name} INTERFACE ${item} ${ARGN})
+
+  target_link_libraries(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${lib_name})
+endfunction()
+
+function(zephyr_library_cc_option)
+  foreach(option ${ARGV})
+    string(MAKE_C_IDENTIFIER check${option} check)
+    zephyr_check_compiler_flag(C ${option} ${check})
+
+    if(${check})
+      zephyr_library_compile_options(${option})
+    endif()
+  endforeach()
+endfunction()
+
+# Add the existing CMake library 'library' to the global list of
+# Zephyr CMake libraries. This is done automatically by the
+# constructor but must called explicitly on CMake libraries that do
+# not use a zephyr library constructor.
+function(zephyr_append_cmake_library library)
+  set_property(GLOBAL APPEND PROPERTY ZEPHYR_LIBS ${library})
+endfunction()
+
+# Add the imported library 'library_name', located at 'library_path' to the
+# global list of Zephyr CMake libraries.
+function(zephyr_library_import library_name library_path)
+  add_library(${library_name} STATIC IMPORTED GLOBAL)
+  set_target_properties(${library_name}
+    PROPERTIES IMPORTED_LOCATION
+    ${library_path}
+    )
+  zephyr_append_cmake_library(${library_name})
+endfunction()
+
+# Place the current zephyr library in the application memory partition.
+#
+# The partition argument is the name of the partition where the library shall
+# be placed.
+#
+# Note: Ensure the given partition has been define using
+#       K_APPMEM_PARTITION_DEFINE in source code.
+function(zephyr_library_app_memory partition)
+  set_property(TARGET zephyr_property_target
+               APPEND PROPERTY COMPILE_OPTIONS
+               "-l" $<TARGET_FILE_NAME:${ZEPHYR_CURRENT_LIBRARY}> "${partition}")
+endfunction()
+
+# 1.2.1 zephyr_interface_library_*
+#
+# A Zephyr interface library is a thin wrapper over a CMake INTERFACE
+# library. The most important responsibility of this abstraction is to
+# ensure that when a user KConfig-enables a library then the header
+# files of this library will be accessible to the 'app' library.
+#
+# This is done because when a user uses Kconfig to enable a library he
+# expects to be able to include it's header files and call it's
+# functions out-of-the box.
+#
+# A Zephyr interface library should be used when there exists some
+# build information (include directories, defines, compiler flags,
+# etc.) that should be applied to a set of Zephyr libraries and 'app'
+# might be one of these libraries.
+#
+# Zephyr libraries must explicitly call
+# zephyr_library_link_libraries(<interface_library>) to use this build
+# information. 'app' is treated as a special case for usability
+# reasons; a Kconfig option (CONFIG_APP_LINK_WITH_<interface_library>)
+# should exist for each interface_library and will determine if 'app'
+# links with the interface_library.
+#
+# This API has a constructor like the zephyr_library API has, but it
+# does not have wrappers over the other cmake target functions.
+macro(zephyr_interface_library_named name)
+  add_library(${name} INTERFACE)
+  set_property(GLOBAL APPEND PROPERTY ZEPHYR_INTERFACE_LIBS ${name})
+endmacro()
+
 # 1.3 generate_inc_*
 
 # These functions are useful if there is a need to generate a file
@@ -355,176 +578,11 @@ function(generate_inc_file_for_target
   # targets
 
   # But first create a unique name for the custom target
-  string(
-    RANDOM
-    LENGTH 8
-    random_chars
-    )
-
-  get_filename_component(basename ${generated_file} NAME)
-  string(REPLACE "." "_" basename ${basename})
-  string(REPLACE "@" "_" basename ${basename})
-
-  set(generated_target_name "gen_${basename}_${random_chars}")
+  generate_unique_target_name_from_filename(${generated_file} generated_target_name)
 
   add_custom_target(${generated_target_name} DEPENDS ${generated_file})
   generate_inc_file_for_gen_target(${target} ${source_file} ${generated_file} ${generated_target_name} ${ARGN})
 endfunction()
-
-# 1.2 zephyr_library_*
-#
-# Zephyr libraries use CMake's library concept and a set of
-# assumptions about how zephyr code is organized to cut down on
-# boilerplate code.
-#
-# A Zephyr library can be constructed by the function zephyr_library
-# or zephyr_library_named. The constructors create a CMake library
-# with a name accessible through the variable ZEPHYR_CURRENT_LIBRARY.
-#
-# The variable ZEPHYR_CURRENT_LIBRARY should seldomly be needed since
-# the zephyr libraries have methods that modify the libraries. These
-# methods have the signature: zephyr_library_<target-function>
-#
-# The methods are wrappers around the CMake target_* functions. See
-# https://cmake.org/cmake/help/latest/manual/cmake-commands.7.html for
-# documentation on the underlying target_* functions.
-#
-# The methods modify the CMake target_* API to reduce boilerplate;
-#  PRIVATE is assumed
-#  The target is assumed to be ZEPHYR_CURRENT_LIBRARY
-#
-# When a flag that is given through the zephyr_* API conflicts with
-# the zephyr_library_* API then precedence will be given to the
-# zephyr_library_* API. In other words, local configuration overrides
-# global configuration.
-
-# Constructor with a directory-inferred name
-macro(zephyr_library)
-  zephyr_library_get_current_dir_lib_name(lib_name)
-  zephyr_library_named(${lib_name})
-endmacro()
-
-# Determines what the current directory's lib name would be and writes
-# it to the argument "lib_name"
-macro(zephyr_library_get_current_dir_lib_name lib_name)
-  # Remove the prefix (/home/sebo/zephyr/driver/serial/CMakeLists.txt => driver/serial/CMakeLists.txt)
-  file(RELATIVE_PATH name ${ZEPHYR_BASE} ${CMAKE_CURRENT_LIST_FILE})
-
-  # Remove the filename (driver/serial/CMakeLists.txt => driver/serial)
-  get_filename_component(name ${name} DIRECTORY)
-
-  # Replace / with __ (driver/serial => driver__serial)
-  string(REGEX REPLACE "/" "__" name ${name})
-
-  set(${lib_name} ${name})
-endmacro()
-
-# Constructor with an explicitly given name.
-macro(zephyr_library_named name)
-  # This is a macro because we need add_library() to be executed
-  # within the scope of the caller.
-  set(ZEPHYR_CURRENT_LIBRARY ${name})
-  add_library(${name} STATIC "")
-
-  zephyr_append_cmake_library(${name})
-
-  target_link_libraries(${name} PUBLIC zephyr_interface)
-endmacro()
-
-
-function(zephyr_link_interface interface)
-  target_link_libraries(${interface} INTERFACE zephyr_interface)
-endfunction()
-
-#
-# zephyr_library versions of normal CMake target_<func> functions
-#
-function(zephyr_library_sources source)
-  target_sources(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${source} ${ARGN})
-endfunction()
-
-function(zephyr_library_include_directories)
-  target_include_directories(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${ARGN})
-endfunction()
-
-function(zephyr_library_link_libraries item)
-  target_link_libraries(${ZEPHYR_CURRENT_LIBRARY} PUBLIC ${item} ${ARGN})
-endfunction()
-
-function(zephyr_library_compile_definitions item)
-  target_compile_definitions(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${item} ${ARGN})
-endfunction()
-
-function(zephyr_library_compile_options item)
-  # The compiler is relied upon for sane behaviour when flags are in
-  # conflict. Compilers generally give precedence to flags given late
-  # on the command line. So to ensure that zephyr_library_* flags are
-  # placed late on the command line we create a dummy interface
-  # library and link with it to obtain the flags.
-  #
-  # Linking with a dummy interface library will place flags later on
-  # the command line than the the flags from zephyr_interface because
-  # zephyr_interface will be the first interface library that flags
-  # are taken from.
-
-  string(RANDOM random)
-  set(lib_name options_interface_lib_${random})
-
-  add_library(           ${lib_name} INTERFACE)
-  target_compile_options(${lib_name} INTERFACE ${item} ${ARGN})
-
-  target_link_libraries(${ZEPHYR_CURRENT_LIBRARY} PRIVATE ${lib_name})
-endfunction()
-
-function(zephyr_library_cc_option)
-  foreach(option ${ARGV})
-    string(MAKE_C_IDENTIFIER check${option} check)
-    zephyr_check_compiler_flag(C ${option} ${check})
-
-    if(${check})
-      zephyr_library_compile_options(${option})
-    endif()
-  endforeach()
-endfunction()
-
-# Add the existing CMake library 'library' to the global list of
-# Zephyr CMake libraries. This is done automatically by the
-# constructor but must called explicitly on CMake libraries that do
-# not use a zephyr library constructor, but have source files that
-# need to be included in the build.
-function(zephyr_append_cmake_library library)
-  set_property(GLOBAL APPEND PROPERTY ZEPHYR_LIBS ${library})
-endfunction()
-
-# 1.2.1 zephyr_interface_library_*
-#
-# A Zephyr interface library is a thin wrapper over a CMake INTERFACE
-# library. The most important responsibility of this abstraction is to
-# ensure that when a user KConfig-enables a library then the header
-# files of this library will be accessible to the 'app' library.
-#
-# This is done because when a user uses Kconfig to enable a library he
-# expects to be able to include it's header files and call it's
-# functions out-of-the box.
-#
-# A Zephyr interface library should be used when there exists some
-# build information (include directories, defines, compiler flags,
-# etc.) that should be applied to a set of Zephyr libraries and 'app'
-# might be one of these libraries.
-#
-# Zephyr libraries must explicitly call
-# zephyr_library_link_libraries(<interface_library>) to use this build
-# information. 'app' is treated as a special case for usability
-# reasons; a Kconfig option (CONFIG_APP_LINK_WITH_<interface_library>)
-# should exist for each interface_library and will determine if 'app'
-# links with the interface_library.
-#
-# This API has a constructor like the zephyr_library API has, but it
-# does not have wrappers over the other cmake target functions.
-macro(zephyr_interface_library_named name)
-  add_library(${name} INTERFACE)
-  set_property(GLOBAL APPEND PROPERTY ZEPHYR_INTERFACE_LIBS ${name})
-endmacro()
 
 # 1.4. board_*
 #
@@ -535,6 +593,66 @@ endmacro()
 #
 # This section provides glue between CMake and the Python code that
 # manages the runners.
+
+function(_board_check_runner_type type) # private helper
+  if (NOT (("${type}" STREQUAL "FLASH") OR ("${type}" STREQUAL "DEBUG")))
+    message(FATAL_ERROR "invalid type ${type}; should be FLASH or DEBUG")
+  endif()
+endfunction()
+
+# This function sets the runner for the board unconditionally.  It's
+# meant to be used from application CMakeLists.txt files.
+#
+# NOTE: Usually board_set_xxx_ifnset() is best in board.cmake files.
+#       This lets the user set the runner at cmake time, or in their
+#       own application's CMakeLists.txt.
+#
+# Usage:
+#   board_set_runner(FLASH pyocd)
+#
+# This would set the board's flash runner to "pyocd".
+#
+# In general, "type" is FLASH or DEBUG, and "runner" is the name of a
+# runner.
+function(board_set_runner type runner)
+  _board_check_runner_type(${type})
+  if (DEFINED BOARD_${type}_RUNNER)
+    message(STATUS "overriding ${type} runner ${BOARD_${type}_RUNNER}; it's now ${runner}")
+  endif()
+  set(BOARD_${type}_RUNNER ${runner} PARENT_SCOPE)
+endfunction()
+
+# This macro is like board_set_runner(), but will only make a change
+# if that runner is currently not set.
+#
+# See also board_set_flasher_ifnset() and board_set_debugger_ifnset().
+macro(board_set_runner_ifnset type runner)
+  _board_check_runner_type(${type})
+  # This is a macro because set_ifndef() works at parent scope.
+  # If this were a function, that would be this function's scope,
+  # which wouldn't work.
+  set_ifndef(BOARD_${type}_RUNNER ${runner})
+endmacro()
+
+# A convenience macro for board_set_runner(FLASH ${runner}).
+macro(board_set_flasher runner)
+  board_set_runner(FLASH ${runner})
+endmacro()
+
+# A convenience macro for board_set_runner(DEBUG ${runner}).
+macro(board_set_debugger runner)
+  board_set_runner(DEBUG ${runner})
+endmacro()
+
+# A convenience macro for board_set_runner_ifnset(FLASH ${runner}).
+macro(board_set_flasher_ifnset runner)
+  board_set_runner_ifnset(FLASH ${runner})
+endmacro()
+
+# A convenience macro for board_set_runner_ifnset(DEBUG ${runner}).
+macro(board_set_debugger_ifnset runner)
+  board_set_runner_ifnset(DEBUG ${runner})
+endmacro()
 
 # This function is intended for board.cmake files and application
 # CMakeLists.txt files.
@@ -628,51 +746,227 @@ endfunction()
 # caching comes in addition to the caching that CMake does in the
 # build folder's CMakeCache.txt)
 function(zephyr_check_compiler_flag lang option check)
-  # Locate the cache
+  # Locate the cache directory
   set_ifndef(
-    ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE
-    ${USER_CACHE_DIR}/ToolchainCapabilityDatabase.cmake
+    ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_DIR
+    ${USER_CACHE_DIR}/ToolchainCapabilityDatabase
     )
 
-  # Read the cache
-  include(${ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE} OPTIONAL)
+  # The toolchain capability database/cache is maintained as a
+  # directory of files. The filenames in the directory are keys, and
+  # the file contents are the values in this key-value store.
 
   # We need to create a unique key wrt. testing the toolchain
-  # capability. This key must be a valid C identifier that includes
-  # everything that can affect the toolchain test.
+  # capability. This key must include everything that can affect the
+  # toolchain test.
+  #
+  # Also, to fit the key into a filename we calculate the MD5 sum of
+  # the key.
 
   # The 'cacheformat' must be bumped if a bug in the caching mechanism
   # is detected and all old keys must be invalidated.
-  set(cacheformat 2)
+  set(cacheformat 3)
 
   set(key_string "")
-  set(key_string "${key_string}ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_")
-  set(key_string "${key_string}cacheformat_")
   set(key_string "${key_string}${cacheformat}_")
   set(key_string "${key_string}${TOOLCHAIN_SIGNATURE}_")
   set(key_string "${key_string}${lang}_")
   set(key_string "${key_string}${option}_")
   set(key_string "${key_string}${CMAKE_REQUIRED_FLAGS}_")
 
-  string(MAKE_C_IDENTIFIER ${key_string} key)
+  string(MD5 key ${key_string})
 
   # Check the cache
-  if(DEFINED ${key})
-    set(${check} ${${key}} PARENT_SCOPE)
+  set(key_path ${ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_DIR}/${key})
+  if(EXISTS ${key_path})
+    file(READ
+    ${key_path}   # File to be read
+    key_value     # Output variable
+    LIMIT 1       # Read at most 1 byte ('0' or '1')
+    )
+
+    set(${check} ${key_value} PARENT_SCOPE)
     return()
   endif()
 
-  # Test the flag
-  check_compiler_flag(${lang} "${option}" inner_check)
+  # Flags that start with -Wno-<warning> can not be tested by
+  # check_compiler_flag, they will always pass, but -W<warning> can be
+  # tested, so to test -Wno-<warning> flags we test -W<warning>
+  # instead.
+  if("${option}" MATCHES "-Wno-(.*)")
+    set(possibly_translated_option -W${CMAKE_MATCH_1})
+  else()
+    set(possibly_translated_option ${option})
+  endif()
+
+  check_compiler_flag(${lang} "${possibly_translated_option}" inner_check)
 
   set(${check} ${inner_check} PARENT_SCOPE)
 
   # Populate the cache
-  file(
-    APPEND
-    ${ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE}
-    "set(${key} ${inner_check})\n"
-    )
+  if(NOT (EXISTS ${key_path}))
+
+    # This is racy. As often with race conditions, this one can easily be
+    # made worse and demonstrated with a simple delay:
+    #    execute_process(COMMAND "sleep" "5")
+    # Delete the cache, add the sleep above and run sanitycheck with a
+    # large number of JOBS. Once it's done look at the log.txt file
+    # below and you will see that concurrent cmake processes created the
+    # same files multiple times.
+
+    # While there are a number of reasons why this race seems both very
+    # unlikely and harmless, let's play it safe anyway and write to a
+    # private, temporary file first. All modern filesystems seem to
+    # support at least one atomic rename API and cmake's file(RENAME
+    # ...) officially leverages that.
+    string(RANDOM LENGTH 8 tempsuffix)
+
+    file(
+      WRITE
+      "${key_path}_tmp_${tempsuffix}"
+      ${inner_check}
+      )
+    file(
+      RENAME
+      "${key_path}_tmp_${tempsuffix}" "${key_path}"
+      )
+
+    # Populate a metadata file (only intended for trouble shooting)
+    # with information about the hash, the toolchain capability
+    # result, and the toolchain test.
+    file(
+      APPEND
+      ${ZEPHYR_TOOLCHAIN_CAPABILITY_CACHE_DIR}/log.txt
+      "${inner_check} ${key} ${key_string}\n"
+      )
+  endif()
+endfunction()
+
+# zephyr_linker_sources(<location> <files>)
+#
+# <files> is one or more .ld formatted files whose contents will be
+#    copied/included verbatim into the given <location> in the global linker.ld.
+#    Preprocessor directives work inside <files>. Relative paths are resolved
+#    relative to the calling file, like zephyr_sources().
+# <location> is one of
+#    NOINIT       Inside the noinit output section.
+#    RWDATA       Inside the data output section.
+#    RODATA       Inside the rodata output section.
+#    RAM_SECTIONS Inside the RAMABLE_REGION GROUP.
+#    SECTIONS     Near the end of the file. Don't use this when linking into
+#                 RAMABLE_REGION, use RAM_SECTIONS instead.
+#
+# Use NOINIT, RWDATA, and RODATA unless they don't work for your use case.
+#
+# When placing into NOINIT, RWDATA, or RODATA, the contents of the files will be
+# placed inside an output section, so assume the section definition is already
+# present, e.g.:
+#    _mysection_start = .;
+#    KEEP(*(.mysection));
+#    _mysection_end = .;
+#    _mysection_size = ABSOLUTE(_mysection_end - _mysection_start);
+#
+# When placing into SECTIONS or RAM_SECTIONS, the files must instead define
+# their own output sections to achieve the same thing:
+#    SECTION_PROLOGUE(.mysection,,)
+#    {
+#        _mysection_start = .;
+#        KEEP(*(.mysection))
+#        _mysection_end = .;
+#    } GROUP_LINK_IN(ROMABLE_REGION)
+#    _mysection_size = _mysection_end - _mysection_start;
+#
+# Note about the above examples: If the first example was used with RODATA, and
+# the second with SECTIONS, the two examples do the same thing from a user
+# perspective.
+#
+# Friendly reminder: Beware of the different ways the location counter ('.')
+# behaves inside vs. outside section definitions.
+function(zephyr_linker_sources location)
+  # Set up the paths to the destination files. These files are #included inside
+  # the global linker.ld.
+  set(snippet_base      "${__build_dir}/include/generated")
+  set(sections_path     "${snippet_base}/snippets-sections.ld")
+  set(ram_sections_path "${snippet_base}/snippets-ram-sections.ld")
+  set(noinit_path       "${snippet_base}/snippets-noinit.ld")
+  set(rwdata_path       "${snippet_base}/snippets-rwdata.ld")
+  set(rodata_path       "${snippet_base}/snippets-rodata.ld")
+
+  # Clear destination files if this is the first time the function is called.
+  get_property(cleared GLOBAL PROPERTY snippet_files_cleared)
+  if (NOT DEFINED cleared)
+    file(WRITE ${sections_path} "")
+    file(WRITE ${ram_sections_path} "")
+    file(WRITE ${noinit_path} "")
+    file(WRITE ${rwdata_path} "")
+    file(WRITE ${rodata_path} "")
+    set_property(GLOBAL PROPERTY snippet_files_cleared true)
+  endif()
+
+  # Choose destination file, based on the <location> argument.
+  if ("${location}" STREQUAL "SECTIONS")
+    set(snippet_path "${sections_path}")
+  elseif("${location}" STREQUAL "RAM_SECTIONS")
+    set(snippet_path "${ram_sections_path}")
+  elseif("${location}" STREQUAL "NOINIT")
+    set(snippet_path "${noinit_path}")
+  elseif("${location}" STREQUAL "RWDATA")
+    set(snippet_path "${rwdata_path}")
+  elseif("${location}" STREQUAL "RODATA")
+    set(snippet_path "${rodata_path}")
+  else()
+    message(fatal_error "Must choose valid location for linker snippet.")
+  endif()
+
+  foreach(file IN ITEMS ${ARGN})
+    # Resolve path.
+    if(IS_ABSOLUTE ${file})
+      set(path ${file})
+    else()
+      set(path ${CMAKE_CURRENT_SOURCE_DIR}/${file})
+    endif()
+
+    if(IS_DIRECTORY ${path})
+      message(FATAL_ERROR "zephyr_linker_sources() was called on a directory")
+    endif()
+
+    # Append the file contents to the relevant destination file.
+    file(READ ${path} snippet)
+    file(RELATIVE_PATH relpath ${ZEPHYR_BASE} ${path})
+    file(APPEND ${snippet_path}
+             "\n/* From \${ZEPHYR_BASE}/${relpath}: */\n" "${snippet}\n")
+  endforeach()
+endfunction(zephyr_linker_sources)
+
+
+# Helper function for CONFIG_CODE_DATA_RELOCATION
+# Call this function with 2 arguments file and then memory location
+function(zephyr_code_relocate file location)
+  set_property(TARGET code_data_relocation_target
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    "${location}:${CMAKE_CURRENT_SOURCE_DIR}/${file}")
+endfunction()
+
+# Usage:
+#   check_dtc_flag("-Wtest" DTC_WARN_TEST)
+#
+# Writes 1 to the output variable 'ok' if
+# the flag is supported, otherwise writes 0.
+#
+# using
+function(check_dtc_flag flag ok)
+  execute_process(
+    COMMAND
+    ${DTC} ${flag} -v
+    ERROR_QUIET
+    OUTPUT_QUIET
+    RESULT_VARIABLE dtc_check_ret
+  )
+  if (dtc_check_ret EQUAL 0)
+    set(${ok} 1 PARENT_SCOPE)
+  else()
+    set(${ok} 0 PARENT_SCOPE)
+  endif()
 endfunction()
 
 ########################################################
@@ -719,20 +1013,24 @@ endfunction()
 
 # 2.2 Misc
 #
-# Parse a KConfig formatted file (typically named *.config) and
-# introduce all the CONF_ variables into the CMake namespace
-function(import_kconfig config_file)
-  # Parse the lines prefixed with CONFIG_ in ${config_file}
+# import_kconfig(<prefix> <kconfig_fragment> [<keys>])
+#
+# Parse a KConfig fragment (typically with extension .config) and
+# introduce all the symbols that are prefixed with 'prefix' into the
+# CMake namespace. List all created variable names in the 'keys'
+# output variable if present.
+function(import_kconfig prefix kconfig_fragment)
+  # Parse the lines prefixed with 'prefix' in ${kconfig_fragment}
   file(
     STRINGS
-    ${config_file}
+    ${kconfig_fragment}
     DOT_CONFIG_LIST
-    REGEX "^CONFIG_"
+    REGEX "^${prefix}"
     ENCODING "UTF-8"
   )
 
   foreach (CONFIG ${DOT_CONFIG_LIST})
-    # CONFIG looks like: CONFIG_NET_BUF=y
+    # CONFIG could look like: CONFIG_NET_BUF=y
 
     # Match the first part, the variable name
     string(REGEX MATCH "[^=]+" CONF_VARIABLE_NAME ${CONFIG})
@@ -748,6 +1046,11 @@ function(import_kconfig config_file)
     endif()
 
     set("${CONF_VARIABLE_NAME}" "${CONF_VARIABLE_VALUE}" PARENT_SCOPE)
+    list(APPEND keys "${CONF_VARIABLE_NAME}")
+  endforeach()
+
+  foreach(outvar ${ARGN})
+    set(${outvar} "${keys}" PARENT_SCOPE)
   endforeach()
 endfunction()
 
@@ -845,6 +1148,12 @@ function(zephyr_library_sources_ifdef feature_toggle source)
   endif()
 endfunction()
 
+function(zephyr_library_sources_ifndef feature_toggle source)
+  if(NOT ${feature_toggle})
+    zephyr_library_sources(${source} ${ARGN})
+  endif()
+endfunction()
+
 function(zephyr_sources_ifdef feature_toggle)
   if(${${feature_toggle}})
     zephyr_sources(${ARGN})
@@ -917,6 +1226,12 @@ function(zephyr_library_link_libraries_ifdef feature_toggle item)
   endif()
 endfunction()
 
+function(zephyr_linker_sources_ifdef feature_toggle)
+  if(${${feature_toggle}})
+    zephyr_linker_sources(${ARGN})
+  endif()
+endfunction()
+
 macro(list_append_ifdef feature_toggle list)
   if(${${feature_toggle}})
     list(APPEND ${list} ${ARGN})
@@ -949,7 +1264,7 @@ function(zephyr_compile_options_ifndef feature_toggle)
   endif()
 endfunction()
 
-# 3.2. *_option Compiler-compatibility checks
+# 3.3. *_option Compiler-compatibility checks
 #
 # Utility functions for silently omitting compiler flags when the
 # compiler lacks support. *_cc_option was ported from KBuild, see
@@ -1039,6 +1354,45 @@ function(target_ld_options target scope)
   endforeach()
 endfunction()
 
+# 3.3.1 Toolchain integration
+#
+# 'toolchain_parse_make_rule' is a function that parses the output of
+# 'gcc -M'.
+#
+# The argument 'input_file' is in input parameter with the path to the
+# file with the dependency information.
+#
+# The argument 'include_files' is an output parameter with the result
+# of parsing the include files.
+function(toolchain_parse_make_rule input_file include_files)
+  file(READ ${input_file} input)
+
+  # The file is formatted like this:
+  # empty_file.o: misc/empty_file.c \
+  # nrf52840_pca10056/nrf52840_pca10056.dts \
+  # nrf52840_qiaa.dtsi
+
+  # Get rid of the backslashes
+  string(REPLACE "\\" ";" input_as_list ${input})
+
+  # Pop the first line and treat it specially
+  list(GET input_as_list 0 first_input_line)
+  string(FIND ${first_input_line} ": " index)
+  math(EXPR j "${index} + 2")
+  string(SUBSTRING ${first_input_line} ${j} -1 first_include_file)
+  list(REMOVE_AT input_as_list 0)
+
+  list(APPEND result ${first_include_file})
+
+  # Add the other lines
+  list(APPEND result ${input_as_list})
+
+  # Strip away the newlines and whitespaces
+  list(TRANSFORM result STRIP)
+
+  set(${include_files} ${result} PARENT_SCOPE)
+endfunction()
+
 # 3.4. Debugging CMake
 
 # Usage:
@@ -1061,10 +1415,10 @@ macro(assert test comment)
 endmacro()
 
 # Usage:
-#   assert_not(FLASH_SCRIPT "FLASH_SCRIPT has been removed; use BOARD_FLASH_RUNNER")
+#   assert_not(OBSOLETE_VAR "OBSOLETE_VAR has been removed; use NEW_VAR instead")
 #
-# will cause a FATAL_ERROR and print an errorm essage if the first
-# espression is true
+# will cause a FATAL_ERROR and print an error message if the first
+# expression is true
 macro(assert_not test comment)
   if(${test})
     message(FATAL_ERROR "Assertion failed: ${comment}")
@@ -1082,24 +1436,18 @@ macro(assert_exists var)
   endif()
 endmacro()
 
-# Usage:
-#   assert_with_usage(BOARD_DIR "No board named '${BOARD}' found")
-#
-# will print an error message, show usage, and then end executioon
-# with a FATAL_ERROR if the test fails.
-macro(assert_with_usage test comment)
-  if(NOT ${test})
-    message(${comment})
-    message("see usage:")
-    execute_process(
-      COMMAND
-      ${CMAKE_COMMAND}
-      -DBOARD_ROOT=${BOARD_ROOT}
-      -P ${ZEPHYR_BASE}/cmake/usage/usage.cmake
-      )
-    message(FATAL_ERROR "Invalid usage")
-  endif()
-endmacro()
+function(print_usage)
+  message("see usage:")
+  string(REPLACE ";" " " BOARD_ROOT_SPACE_SEPARATED "${BOARD_ROOT}")
+  string(REPLACE ";" " " SHIELD_LIST_SPACE_SEPARATED "${SHIELD_LIST}")
+  execute_process(
+    COMMAND
+    ${CMAKE_COMMAND}
+    -DBOARD_ROOT_SPACE_SEPARATED=${BOARD_ROOT_SPACE_SEPARATED}
+    -DSHIELD_LIST_SPACE_SEPARATED=${SHIELD_LIST_SPACE_SEPARATED}
+    -P ${ZEPHYR_BASE}/cmake/usage/usage.cmake
+    )
+endfunction()
 
 # 3.5. File system management
 function(check_if_directory_is_writeable dir ok)
@@ -1173,4 +1521,14 @@ function(find_appropriate_cache_directory dir)
   endif()
 
   set(${dir} ${local_dir} PARENT_SCOPE)
+endfunction()
+
+function(generate_unique_target_name_from_filename filename target_name)
+  get_filename_component(basename ${filename} NAME)
+  string(REPLACE "." "_" x ${basename})
+  string(REPLACE "@" "_" x ${x})
+
+  string(MD5 unique_chars ${filename})
+
+  set(${target_name} gen_${x}_${unique_chars} PARENT_SCOPE)
 endfunction()

@@ -1,10 +1,7 @@
-# Kconfig - Private config options for VLAN sample app
+# Private config options for VLAN sample app
 
-#
 # Copyright (c) 2018 Intel Corporation
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 mainmenu "Networking VLAN sample application"
 
@@ -35,4 +32,4 @@ config SAMPLE_IPV4_ADDR_2
 	  The value depends on your network setup.
 
 
-source "$ZEPHYR_BASE/Kconfig.zephyr"
+source "Kconfig.zephyr"

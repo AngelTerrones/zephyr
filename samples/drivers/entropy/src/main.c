@@ -5,7 +5,7 @@
  */
 
 #include <zephyr.h>
-#include <entropy.h>
+#include <drivers/entropy.h>
 #include <stdio.h>
 
 void main(void)
@@ -40,7 +40,7 @@ void main(void)
 			break;
 		}
 
-		if (buffer[BUFFER_LENGTH-1] != 0) {
+		if (buffer[BUFFER_LENGTH-1] != 0U) {
 			printf("entropy_get_entropy buffer overflow\n");
 		}
 
@@ -50,6 +50,6 @@ void main(void)
 
 		printf("\n");
 
-		k_sleep(1000);
+		k_sleep(K_MSEC(1000));
 	}
 }

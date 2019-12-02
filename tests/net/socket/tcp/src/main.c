@@ -4,8 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <logging/log.h>
+LOG_MODULE_REGISTER(net_test, CONFIG_NET_SOCKETS_LOG_LEVEL);
+
 #include <ztest_assert.h>
+#include <fcntl.h>
 #include <net/socket.h>
+
+#include "../../socket_helpers.h"
 
 #define TEST_STR_SMALL "test"
 
@@ -15,46 +21,6 @@
 #define MAX_CONNS 5
 
 #define TCP_TEARDOWN_TIMEOUT K_SECONDS(1)
-
-static void prepare_sock_v4(const char *addr,
-			    u16_t port,
-			    int *sock,
-			    struct sockaddr_in *sockaddr)
-{
-	int rv;
-
-	zassert_not_null(addr, "null addr");
-	zassert_not_null(sock, "null sock");
-	zassert_not_null(sockaddr, "null sockaddr");
-
-	*sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	zassert_true(*sock >= 0, "socket open failed");
-
-	sockaddr->sin_family = AF_INET;
-	sockaddr->sin_port = htons(port);
-	rv = inet_pton(AF_INET, addr, &sockaddr->sin_addr);
-	zassert_equal(rv, 1, "inet_pton failed");
-}
-
-static void prepare_sock_v6(const char *addr,
-			    u16_t port,
-			    int *sock,
-			    struct sockaddr_in6 *sockaddr)
-{
-	int rv;
-
-	zassert_not_null(addr, "null addr");
-	zassert_not_null(sock, "null sock");
-	zassert_not_null(sockaddr, "null sockaddr");
-
-	*sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
-	zassert_true(*sock >= 0, "socket open failed");
-
-	sockaddr->sin6_family = AF_INET6;
-	sockaddr->sin6_port = htons(port);
-	rv = inet_pton(AF_INET6, addr, &sockaddr->sin6_addr);
-	zassert_equal(rv, 1, "inet_pton failed");
-}
 
 static void test_bind(int sock, struct sockaddr *addr, socklen_t addrlen)
 {
@@ -101,6 +67,21 @@ static void test_accept(int sock, int *new_sock, struct sockaddr *addr,
 	zassert_true(*new_sock >= 0, "accept failed");
 }
 
+static void test_accept_timeout(int sock, int *new_sock, struct sockaddr *addr,
+				socklen_t *addrlen)
+{
+	zassert_not_null(new_sock, "null newsock");
+
+	*new_sock = accept(sock, addr, addrlen);
+	zassert_equal(*new_sock, -1, "accept succeed");
+	zassert_equal(errno, EAGAIN, "");
+}
+
+static void test_fcntl(int sock, int cmd, int val)
+{
+	zassert_equal(fcntl(sock, cmd, val), 0, "fcntl failed");
+}
+
 static void test_recv(int sock, int flags)
 {
 	ssize_t recved = 0;
@@ -144,6 +125,28 @@ static void test_close(int sock)
 		      "close failed");
 }
 
+/* Test that EOF handling works correctly. Should be called with socket
+ * whose peer socket was closed.
+ */
+static void test_eof(int sock)
+{
+	char rx_buf[1];
+	ssize_t recved;
+
+	/* Test that EOF properly detected. */
+	recved = recv(sock, rx_buf, sizeof(rx_buf), 0);
+	zassert_equal(recved, 0, "");
+
+	/* Calling again should be OK. */
+	recved = recv(sock, rx_buf, sizeof(rx_buf), 0);
+	zassert_equal(recved, 0, "");
+
+	/* Calling when TCP connection is fully torn down should be still OK. */
+	k_sleep(TCP_TEARDOWN_TIMEOUT);
+	recved = recv(sock, rx_buf, sizeof(rx_buf), 0);
+	zassert_equal(recved, 0, "");
+}
+
 void test_v4_send_recv(void)
 {
 	/* Test if send() and recv() work on a ipv4 stream socket. */
@@ -155,15 +158,10 @@ void test_v4_send_recv(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
-
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -177,8 +175,10 @@ void test_v4_send_recv(void)
 	test_recv(new_sock, MSG_PEEK);
 	test_recv(new_sock, 0);
 
-	test_close(new_sock);
 	test_close(c_sock);
+	test_eof(new_sock);
+
+	test_close(new_sock);
 	test_close(s_sock);
 
 	k_sleep(TCP_TEARDOWN_TIMEOUT);
@@ -195,15 +195,10 @@ void test_v6_send_recv(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
-
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -217,9 +212,11 @@ void test_v6_send_recv(void)
 	test_recv(new_sock, MSG_PEEK);
 	test_recv(new_sock, 0);
 
+	test_close(c_sock);
+	test_eof(new_sock);
+
 	test_close(new_sock);
 	test_close(s_sock);
-	test_close(c_sock);
 
 	k_sleep(TCP_TEARDOWN_TIMEOUT);
 }
@@ -234,15 +231,10 @@ void test_v4_sendto_recvfrom(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
-
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -277,15 +269,11 @@ void test_v6_sendto_recvfrom(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
 
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -321,15 +309,10 @@ void test_v4_sendto_recvfrom_null_dest(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
-
-	prepare_sock_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -361,15 +344,10 @@ void test_v6_sendto_recvfrom_null_dest(void)
 	struct sockaddr addr;
 	socklen_t addrlen = sizeof(addr);
 
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			ANY_PORT,
-			&c_sock,
-			&c_saddr);
-
-	prepare_sock_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR,
-			SERVER_PORT,
-			&s_sock,
-			&s_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v6(CONFIG_NET_CONFIG_MY_IPV6_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
 
 	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
 	test_listen(s_sock);
@@ -390,15 +368,96 @@ void test_v6_sendto_recvfrom_null_dest(void)
 	k_sleep(TCP_TEARDOWN_TIMEOUT);
 }
 
+static void calc_net_context(struct net_context *context, void *user_data)
+{
+	int *count = user_data;
+
+	(*count)++;
+}
+
+void test_open_close_immediately(void)
+{
+	/* Test if socket closing works if done immediately after
+	 * receiving SYN.
+	 */
+	int count_before = 0, count_after = 0;
+	struct sockaddr_in c_saddr;
+	struct sockaddr_in s_saddr;
+	int c_sock;
+	int s_sock;
+
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, ANY_PORT,
+			    &c_sock, &c_saddr);
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
+
+	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
+	test_listen(s_sock);
+
+	/* We should have two contexts open now */
+	net_context_foreach(calc_net_context, &count_before);
+
+	/* Try to connect to a port that is not accepting connections.
+	 * The end result should be that we do not leak net_context.
+	 */
+	s_saddr.sin_port = htons(SERVER_PORT + 1);
+
+	zassert_not_equal(connect(c_sock, (struct sockaddr *)&s_saddr,
+				  sizeof(s_saddr)),
+			  0, "connect succeed");
+	test_close(c_sock);
+
+	/* After the client socket closing, the context count should be 1 */
+	net_context_foreach(calc_net_context, &count_after);
+
+	test_close(s_sock);
+
+	zassert_equal(count_before - 1, count_after,
+		      "net_context still in use (before %d vs after %d)",
+		      count_before - 1, count_after);
+
+	k_sleep(TCP_TEARDOWN_TIMEOUT);
+}
+
+void test_v4_accept_timeout(void)
+{
+	/* Test if accept() will timeout properly */
+	int s_sock;
+	int new_sock;
+	u32_t tstamp;
+	struct sockaddr_in s_saddr;
+	struct sockaddr addr;
+	socklen_t addrlen = sizeof(addr);
+
+	prepare_sock_tcp_v4(CONFIG_NET_CONFIG_MY_IPV4_ADDR, SERVER_PORT,
+			    &s_sock, &s_saddr);
+
+	test_bind(s_sock, (struct sockaddr *)&s_saddr, sizeof(s_saddr));
+	test_listen(s_sock);
+
+	test_fcntl(s_sock, F_SETFL, O_NONBLOCK);
+
+	tstamp = k_uptime_get_32();
+	test_accept_timeout(s_sock, &new_sock, &addr, &addrlen);
+	zassert_true(k_uptime_get_32() - tstamp <= 100, "");
+
+	test_close(s_sock);
+
+	k_sleep(TCP_TEARDOWN_TIMEOUT);
+}
+
 void test_main(void)
 {
-	ztest_test_suite(socket_tcp,
-			 ztest_user_unit_test(test_v4_send_recv),
-			 ztest_user_unit_test(test_v6_send_recv),
-			 ztest_user_unit_test(test_v4_sendto_recvfrom),
-			 ztest_user_unit_test(test_v6_sendto_recvfrom),
-			 ztest_user_unit_test(test_v4_sendto_recvfrom_null_dest),
-			 ztest_user_unit_test(test_v6_sendto_recvfrom_null_dest));
+	ztest_test_suite(
+		socket_tcp,
+		ztest_user_unit_test(test_v4_send_recv),
+		ztest_user_unit_test(test_v6_send_recv),
+		ztest_user_unit_test(test_v4_sendto_recvfrom),
+		ztest_user_unit_test(test_v6_sendto_recvfrom),
+		ztest_user_unit_test(test_v4_sendto_recvfrom_null_dest),
+		ztest_user_unit_test(test_v6_sendto_recvfrom_null_dest),
+		ztest_unit_test(test_open_close_immediately),
+		ztest_user_unit_test(test_v4_accept_timeout));
 
 	ztest_run_test_suite(socket_tcp);
 }

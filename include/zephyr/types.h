@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __Z_TYPES_H__
-#define __Z_TYPES_H__
+#ifndef ZEPHYR_INCLUDE_ZEPHYR_TYPES_H_
+#define ZEPHYR_INCLUDE_ZEPHYR_TYPES_H_
 
 #include <stdint.h>
 
@@ -23,8 +23,11 @@ typedef unsigned short      u16_t;
 typedef unsigned int        u32_t;
 typedef unsigned long long  u64_t;
 
+/* 32 bits on ILP32 builds, 64 bits on LP64 builts */
+typedef unsigned long       ulong_t;
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __Z_TYPES_H__ */
+#endif /* ZEPHYR_INCLUDE_ZEPHYR_TYPES_H_ */

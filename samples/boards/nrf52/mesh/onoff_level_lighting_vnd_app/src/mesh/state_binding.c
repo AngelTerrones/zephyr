@@ -5,12 +5,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <board.h>
-#include <gpio.h>
+#include <drivers/gpio.h>
 
-#include "common.h"
 #include "ble_mesh.h"
 #include "device_composition.h"
+#include "state_binding.h"
+#include "storage.h"
+#include "transition.h"
 
 #define MINDIFF 2.25e-308
 
@@ -46,161 +47,203 @@ static s32_t ceiling(float num)
 	return inum + 1;
 }
 
-static bool constrain_light_actual_state(u16_t var)
+static u16_t actual_to_linear(u16_t val)
 {
-	bool is_value_within_range;
-
-	is_value_within_range = false;
-
-	if (var > 0 &&
-	    var < light_lightness_srv_user_data.light_range_min) {
-		var = light_lightness_srv_user_data.light_range_min;
-	} else if (var > light_lightness_srv_user_data.light_range_max) {
-		var = light_lightness_srv_user_data.light_range_max;
-	} else {
-		is_value_within_range = true;
-	}
-
-	light_lightness_srv_user_data.actual = var;
-
-	return is_value_within_range;
-}
-
-static void update_gen_onoff_state(void)
-{
-	if (light_lightness_srv_user_data.actual == 0) {
-		gen_onoff_srv_root_user_data.onoff = STATE_OFF;
-	} else {
-		gen_onoff_srv_root_user_data.onoff = STATE_ON;
-	}
-}
-
-void state_binding(u8_t lightness, u8_t temperature)
-{
-	bool is_value_within_range;
-	u16_t tmp16;
 	float tmp;
 
-	switch (temperature) {
-	case ONOFF_TEMP:/* Temp. update as per Light CTL temp. default state */
-	case CTL_TEMP:	/* Temp. update as per Light CTL temp. state */
-		/* Mesh Model Specification 6.1.3.1.1 2nd formula start */
-		tmp = (light_ctl_srv_user_data.temp -
-		       light_ctl_srv_user_data.temp_range_min) * 65535;
-		tmp = tmp / (light_ctl_srv_user_data.temp_range_max -
-			     light_ctl_srv_user_data.temp_range_min);
-		gen_level_srv_s0_user_data.level = tmp - 32768;
-		/* 6.1.3.1.1 2nd formula end */
-		break;
-	case LEVEL_TEMP:/* Temp. update as per Generic Level (s0) state */
-		/* Mesh Model Specification 6.1.3.1.1 1st formula start */
-		tmp = (float) (light_ctl_srv_user_data.temp_range_max -
-			       light_ctl_srv_user_data.temp_range_min) / 65535;
-		tmp = (gen_level_srv_s0_user_data.level + 32768) * tmp;
-		light_ctl_srv_user_data.temp =
-			light_ctl_srv_user_data.temp_range_min + tmp;
-		/* 6.1.3.1.1 1st formula end */
-		break;
-	default:
-		break;
+	tmp = ((float) val / UINT16_MAX);
+
+	return (u16_t) ceiling(UINT16_MAX * tmp * tmp);
+}
+
+static u16_t linear_to_actual(u16_t val)
+{
+	return (u16_t) (UINT16_MAX * sqrt(((float) val / UINT16_MAX)));
+}
+
+u16_t constrain_lightness(u16_t light)
+{
+	if (light > 0 && light < ctl->light->range_min) {
+		light = ctl->light->range_min;
+	} else if (light > ctl->light->range_max) {
+		light = ctl->light->range_max;
 	}
 
-	tmp16 = 0;
+	return light;
+}
 
-	switch (lightness) {
-	case ONPOWERUP: /* Lightness update as per Generic OnPowerUp state */
-		if (gen_onoff_srv_root_user_data.onoff == STATE_OFF) {
-			light_lightness_srv_user_data.actual = 0;
-			light_lightness_srv_user_data.linear = 0;
-			gen_level_srv_root_user_data.level = -32768;
-			light_ctl_srv_user_data.lightness = 0;
-			return;
-		} else if (gen_onoff_srv_root_user_data.onoff == STATE_ON) {
-			light_lightness_srv_user_data.actual =
-				light_lightness_srv_user_data.last;
+static void constrain_target_lightness(void)
+{
+	ctl->light->target = constrain_lightness(ctl->light->target);
+}
+
+static void constrain_target_lightness2(void)
+{
+	/* This is as per Mesh Model Specification 3.3.2.2.3 */
+	if (ctl->light->target > 0 &&
+	    ctl->light->target < ctl->light->range_min) {
+		if (ctl->light->delta < 0) {
+			ctl->light->target = 0U;
+		} else {
+			ctl->light->target = ctl->light->range_min;
 		}
+	} else if (ctl->light->target > ctl->light->range_max) {
+		ctl->light->target = ctl->light->range_max;
+	}
+}
 
-		break;
-	case ONOFF: /* Lightness update as per Generic OnOff (root) state */
-		if (gen_onoff_srv_root_user_data.onoff == STATE_OFF) {
-			light_lightness_srv_user_data.actual = 0;
-			light_lightness_srv_user_data.linear = 0;
-			gen_level_srv_root_user_data.level = -32768;
-			light_ctl_srv_user_data.lightness = 0;
-			return;
-		} else if (gen_onoff_srv_root_user_data.onoff == STATE_ON) {
-			if (light_lightness_srv_user_data.def == 0) {
-				light_lightness_srv_user_data.actual =
-					light_lightness_srv_user_data.last;
+static s16_t light_ctl_temp_to_level(u16_t temp)
+{
+	float tmp;
+
+	/* Mesh Model Specification 6.1.3.1.1 2nd formula start */
+
+	tmp = (temp - ctl->temp->range_min) * UINT16_MAX;
+
+	tmp = tmp / (ctl->temp->range_max - ctl->temp->range_min);
+
+	return (s16_t) (tmp + INT16_MIN);
+
+	/* 6.1.3.1.1 2nd formula end */
+}
+
+u16_t level_to_light_ctl_temp(s16_t level)
+{
+	u16_t tmp;
+	float diff;
+
+	/* Mesh Model Specification 6.1.3.1.1 1st formula start */
+	diff = (float) (ctl->temp->range_max - ctl->temp->range_min) /
+		       UINT16_MAX;
+
+	tmp = (u16_t) ((level - INT16_MIN) * diff);
+
+	return (ctl->temp->range_min + tmp);
+
+	/* 6.1.3.1.1 1st formula end */
+}
+
+void set_target(u8_t type, void *dptr)
+{
+	bool set_light_ctl_delta_uv_target_value;
+
+	set_light_ctl_delta_uv_target_value = true;
+
+	switch (type) {
+	case ONOFF: {
+		u8_t onoff;
+
+		onoff = *((u8_t *) dptr);
+		if (onoff == STATE_OFF) {
+			ctl->light->target = 0U;
+		} else if (onoff == STATE_ON) {
+			if (ctl->light->def == 0U) {
+				ctl->light->target = ctl->light->last;
 			} else {
-				light_lightness_srv_user_data.actual =
-					light_lightness_srv_user_data.def;
+				ctl->light->target = ctl->light->def;
 			}
 		}
-
+	}
+	break;
+	case LEVEL:
+		ctl->light->target = *((s16_t *) dptr) - INT16_MIN;
+		constrain_target_lightness();
 		break;
-	case LEVEL: /* Lightness update as per Generic Level (root) state */
-		tmp16 = gen_level_srv_root_user_data.level + 32768;
-		constrain_light_actual_state(tmp16);
-		update_gen_onoff_state();
+	case DELTA_LEVEL:
+		ctl->light->target =  *((s16_t *) dptr) - INT16_MIN;
+		constrain_target_lightness2();
 		break;
-	case DELTA_LEVEL: /* Lightness update as per Gen. Level (root) state */
-		/* This is as per Mesh Model Specification 3.3.2.2.3 */
-		tmp16 = gen_level_srv_root_user_data.level + 32768;
-		if (tmp16 > 0 &&
-		    tmp16 < light_lightness_srv_user_data.light_range_min) {
-			if (gen_level_srv_root_user_data.last_delta < 0) {
-				tmp16 = 0;
-			} else {
-				tmp16 =
-				light_lightness_srv_user_data.light_range_min;
-			}
-		} else if (tmp16 >
-			   light_lightness_srv_user_data.light_range_max) {
-			tmp16 =
-			light_lightness_srv_user_data.light_range_max;
-		}
-
-		light_lightness_srv_user_data.actual = tmp16;
-
-		update_gen_onoff_state();
+	case ACTUAL:
+		ctl->light->target = *((u16_t *) dptr);
 		break;
-	case ACTUAL: /* Lightness update as per Light Lightness Actual state */
-		update_gen_onoff_state();
+	case LINEAR:
+		ctl->light->target = linear_to_actual(*((u16_t *) dptr));
+		constrain_target_lightness();
 		break;
-	case LINEAR: /* Lightness update as per Light Lightness Linear state */
-		tmp16 = (u16_t) 65535 *
-			sqrt(((float) light_lightness_srv_user_data.linear /
-			      65535));
-
-		is_value_within_range = constrain_light_actual_state(tmp16);
-		update_gen_onoff_state();
-
-		if (is_value_within_range) {
-			goto ignore_linear_update_others;
-		}
-
+	case CTL:
+		set_light_ctl_delta_uv_target_value = false;
+		ctl->light->target = *((u16_t *) dptr);
+		constrain_target_lightness();
 		break;
-	case CTL: /* Lightness update as per Light CTL Lightness state */
-		constrain_light_actual_state(light_ctl_srv_user_data.lightness);
-		update_gen_onoff_state();
+	case LEVEL_TEMP:
+		ctl->temp->target = level_to_light_ctl_temp(*((s16_t *) dptr));
+		break;
+	case CTL_TEMP:
+		set_light_ctl_delta_uv_target_value = false;
+		ctl->temp->target = *((u16_t *) dptr);
+		break;
+	case CTL_DELTA_UV:
+		ctl->duv->target = *((s16_t *) dptr);
 		break;
 	default:
 		return;
 	}
 
-	tmp = ((float) light_lightness_srv_user_data.actual / 65535);
-	light_lightness_srv_user_data.linear = ceiling(65535 * tmp * tmp);
-
-ignore_linear_update_others:
-	if (light_lightness_srv_user_data.actual != 0) {
-		light_lightness_srv_user_data.last =
-			light_lightness_srv_user_data.actual;
+	if (set_light_ctl_delta_uv_target_value) {
+		ctl->duv->target = ctl->duv->current;
 	}
 
-	gen_level_srv_root_user_data.level =
-		light_lightness_srv_user_data.actual - 32768;
+	if (ctl->onpowerup == STATE_RESTORE) {
+		save_on_flash(LIGHTNESS_TEMP_LAST_TARGET_STATE);
+	}
+}
 
-	light_ctl_srv_user_data.lightness =
-		light_lightness_srv_user_data.actual;
+int get_current(u8_t type)
+{
+	switch (type) {
+	case ONOFF:
+		if (ctl->light->current != 0U) {
+			return STATE_ON;
+		} else {
+			if (ctl->light->target) {
+				return STATE_ON;
+			} else {
+				return STATE_OFF;
+			}
+		}
+	case LEVEL:
+		return (s16_t) (ctl->light->current + INT16_MIN);
+	case ACTUAL:
+		return ctl->light->current;
+	case LINEAR:
+		return actual_to_linear(ctl->light->current);
+	case CTL:
+		return ctl->light->current;
+	case LEVEL_TEMP:
+		return light_ctl_temp_to_level(ctl->temp->current);
+	case CTL_TEMP:
+		return ctl->temp->current;
+	case CTL_DELTA_UV:
+		return ctl->duv->current;
+	default:
+		return 0U;
+	}
+}
+
+int get_target(u8_t type)
+{
+	switch (type) {
+	case ONOFF:
+		if (ctl->light->target != 0U) {
+			return STATE_ON;
+		} else {
+			return STATE_OFF;
+		}
+	case LEVEL:
+		return (s16_t) (ctl->light->target + INT16_MIN);
+	case ACTUAL:
+		return ctl->light->target;
+	case LINEAR:
+		return actual_to_linear(ctl->light->target);
+	case CTL:
+		return ctl->light->target;
+	case LEVEL_TEMP:
+		return light_ctl_temp_to_level(ctl->temp->target);
+	case CTL_TEMP:
+		return ctl->temp->target;
+	case CTL_DELTA_UV:
+		return ctl->duv->target;
+	default:
+		return 0U;
+	}
 }

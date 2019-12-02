@@ -15,12 +15,12 @@ static irq_offload_routine_t offload_routine;
 static void *offload_param;
 
 /* Called by trap_s exception handler */
-void _irq_do_offload(void)
+void z_irq_do_offload(void)
 {
 	offload_routine(offload_param);
 }
 
-void irq_offload(irq_offload_routine_t routine, void *parameter)
+void arch_irq_offload(irq_offload_routine_t routine, void *parameter)
 {
 	unsigned int key;
 

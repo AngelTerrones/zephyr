@@ -11,5 +11,16 @@ arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
-ram: 128
-flash: 128
+  - xtools
+ram: 32768
+flash: 65536
+supported:
+  - counter
+  - display
+  - gpio
+  - hwinfo
+  - i2c
+  - netif:eth
+  - sdhc
+  - spi
+  - usb_device

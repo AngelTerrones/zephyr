@@ -6,9 +6,9 @@
 
 #include <zephyr.h>
 #include <device.h>
-#include <sensor.h>
+#include <drivers/sensor.h>
 #include <stdio.h>
-#include <misc/__assert.h>
+#include <sys/__assert.h>
 
 K_SEM_DEFINE(sem, 0, 1);
 
@@ -84,16 +84,20 @@ static void process(struct device *dev)
 		       sensor_value_to_double(&temp_val));
 
 		if (!IS_ENABLED(CONFIG_ADT7420_TRIGGER)) {
-			k_sleep(1000);
+			k_sleep(K_MSEC(1000));
 		}
 	}
 }
 
 void main(void)
 {
-	struct device *dev = device_get_binding(CONFIG_ADT7420_NAME);
+	struct device *dev = device_get_binding(DT_INST_0_ADI_ADT7420_LABEL);
 
-	__ASSERT(dev != NULL, "Failed to get device binding");
+	if (dev == NULL) {
+		printf("Failed to get device binding\n");
+		return;
+	}
+
 	printf("device is %p, name is %s\n", dev, dev->config->name);
 
 	process(dev);

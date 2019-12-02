@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _GPIO_MMIO32_H_
-#define _GPIO_MMIO32_H_
+#ifndef ZEPHYR_INCLUDE_DRIVERS_GPIO_GPIO_MMIO32_H_
+#define ZEPHYR_INCLUDE_DRIVERS_GPIO_GPIO_MMIO32_H_
 
 #include <device.h>
-#include <gpio.h>
+#include <drivers/gpio.h>
 #include <zephyr/types.h>
 
 struct gpio_mmio32_config {
@@ -61,4 +61,4 @@ DEVICE_INIT(_dev_name, _drv_name,					\
 #endif
 
 
-#endif /* _GPIO_MMIO32_H_ */
+#endif /* ZEPHYR_INCLUDE_DRIVERS_GPIO_GPIO_MMIO32_H_ */

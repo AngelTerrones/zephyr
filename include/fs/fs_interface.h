@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _FS_INTERFACE_H_
-#define _FS_INTERFACE_H_
+#ifndef ZEPHYR_INCLUDE_FS_FS_INTERFACE_H_
+#define ZEPHYR_INCLUDE_FS_FS_INTERFACE_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifdef CONFIG_FILE_SYSTEM_NFFS
+#if defined(CONFIG_FILE_SYSTEM_LITTLEFS) || defined(CONFIG_FILE_SYSTEM_NFFS)
 #define MAX_FILE_NAME 256
 #else /* FAT_FS */
 #define MAX_FILE_NAME 12 /* Uses 8.3 SFN */
@@ -45,4 +45,4 @@ struct fs_dir_t {
 }
 #endif
 
-#endif /* _FS_INTERFACE_H_ */
+#endif /* ZEPHYR_INCLUDE_FS_FS_INTERFACE_H_ */

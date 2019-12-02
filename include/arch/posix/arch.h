@@ -14,48 +14,68 @@
  */
 
 
-#ifndef _ARCH_IFACE_H
-#define _ARCH_IFACE_H
+#ifndef ZEPHYR_INCLUDE_ARCH_POSIX_ARCH_H_
+#define ZEPHYR_INCLUDE_ARCH_POSIX_ARCH_H_
+
+/* Add include for DTS generated information */
+#include <generated_dts_board.h>
 
 #include <toolchain.h>
 #include <irq.h>
 #include <arch/posix/asm_inline.h>
+#include <arch/posix/thread.h>
 #include <board_irq.h> /* Each board must define this */
 #include <sw_isr_table.h>
+#include <arch/posix/posix_soc_if.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#ifdef CONFIG_64BIT
+#define STACK_ALIGN 8
+#define STACK_ALIGN_SIZE 8
+#else
 #define STACK_ALIGN 4
 #define STACK_ALIGN_SIZE 4
-
-#define _NANO_ERR_CPU_EXCEPTION (0)     /* Any unhandled exception */
-#define _NANO_ERR_INVALID_TASK_EXIT (1) /* Invalid task exit */
-#define _NANO_ERR_STACK_CHK_FAIL (2)    /* Stack corruption detected */
-#define _NANO_ERR_ALLOCATION_FAIL (3)   /* Kernel Allocation Failure */
-#define _NANO_ERR_SPURIOUS_INT (4)  /* Spurious interrupt */
-#define _NANO_ERR_KERNEL_OOPS (5)       /* Kernel oops (fatal to thread) */
-#define _NANO_ERR_KERNEL_PANIC (6)  /* Kernel panic (fatal to system) */
+#endif
 
 struct __esf {
-	u32_t dummy; /*maybe we will want to add somethign someday*/
+	u32_t dummy; /*maybe we will want to add something someday*/
 };
 
-typedef struct __esf NANO_ESF;
-extern const NANO_ESF _default_esf;
+typedef struct __esf z_arch_esf_t;
 
-extern u32_t _timer_cycle_get_32(void);
-#define _arch_k_cycle_get_32()  _timer_cycle_get_32()
+extern u32_t z_timer_cycle_get_32(void);
 
-FUNC_NORETURN void _SysFatalErrorHandler(unsigned int reason,
-					 const NANO_ESF *esf);
+static inline u32_t arch_k_cycle_get_32(void)
+{
+	return z_timer_cycle_get_32();
+}
 
-FUNC_NORETURN void _NanoFatalErrorHandler(unsigned int reason,
-					  const NANO_ESF *esf);
+static ALWAYS_INLINE void arch_nop(void)
+{
+	__asm__ volatile("nop");
+}
+
+static ALWAYS_INLINE bool arch_irq_unlocked(unsigned int key)
+{
+	return key == false;
+}
+
+static ALWAYS_INLINE unsigned int arch_irq_lock(void)
+{
+	return posix_irq_lock();
+}
+
+
+static ALWAYS_INLINE void arch_irq_unlock(unsigned int key)
+{
+	posix_irq_unlock(key);
+}
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _ARCH_IFACE_H */
+#endif /* ZEPHYR_INCLUDE_ARCH_POSIX_ARCH_H_ */

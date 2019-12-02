@@ -101,13 +101,13 @@ void print_var_values(void)
 	printf("ccm_data_var_32 addr: %p value: 0x%08x\n",
 		&ccm_data_var_32, ccm_data_var_32);
 	printf("ccm_data_array  addr: %p size: %d value:\n\t",
-		ccm_data_array, sizeof(ccm_data_array));
+		ccm_data_array, (int)sizeof(ccm_data_array));
 	print_array(ccm_data_array, sizeof(ccm_data_array));
 	printf("\nccm_bss_array addr: %p size: %d value:\n\t",
-		ccm_bss_array, sizeof(ccm_bss_array));
+		ccm_bss_array, (int)sizeof(ccm_bss_array));
 	print_array(ccm_bss_array, sizeof(ccm_bss_array));
 	printf("\nccm_noinit_array addr: %p size: %d value:\n\t",
-		ccm_noinit_array, sizeof(ccm_noinit_array));
+		ccm_noinit_array, (int)sizeof(ccm_noinit_array));
 	print_array(ccm_noinit_array, sizeof(ccm_noinit_array));
 	printf("\n");
 }
@@ -136,9 +136,9 @@ void main(void)
 	ccm_data_var_16 = ~CCM_DATA_VAR_16_VAL;
 	ccm_data_var_32 = ~CCM_DATA_VAR_32_VAL;
 
-	memset(ccm_data_array, 0xAA, sizeof(ccm_data_array));
-	memset(ccm_bss_array, 0xBB, sizeof(ccm_bss_array));
-	memset(ccm_noinit_array, 0xCC, sizeof(ccm_noinit_array));
+	(void)memset(ccm_data_array, 0xAA, sizeof(ccm_data_array));
+	(void)memset(ccm_bss_array, 0xBB, sizeof(ccm_bss_array));
+	(void)memset(ccm_noinit_array, 0xCC, sizeof(ccm_noinit_array));
 
 	printf("\nVariable values after writing:\n");
 	print_var_values();

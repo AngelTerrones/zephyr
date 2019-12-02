@@ -16,8 +16,8 @@
 #define  THIRD_SECOND               (333)
 #define  FOURTH_SECOND              (250)
 
-#define COOP_STACKSIZE   512
-#define PREEM_STACKSIZE  1024
+#define COOP_STACKSIZE   (512 + CONFIG_TEST_EXTRA_STACKSIZE)
+#define PREEM_STACKSIZE  (1024 + CONFIG_TEST_EXTRA_STACKSIZE)
 
 #define FIFO_TEST_START       10
 #define FIFO_TEST_END         20
@@ -35,12 +35,12 @@ static K_THREAD_STACK_DEFINE(offload_work_q_stack,
 			     CONFIG_OFFLOAD_WORKQUEUE_STACK_SIZE);
 
 struct fifo_data {
-	u32_t reserved;
+	intptr_t reserved;
 	u32_t data;
 };
 
 struct lifo_data {
-	u32_t reserved;
+	intptr_t reserved;
 	u32_t data;
 };
 
@@ -196,7 +196,7 @@ static void timer_tests(void)
 
 	timer_start_tick = k_uptime_get_32();
 
-	k_timer_start(&timer, NUM_SECONDS(1), 0);
+	k_timer_start(&timer, NUM_SECONDS(1), K_NO_WAIT);
 
 	if (k_timer_status_sync(&timer)) {
 		timer_data = timer.user_data;
@@ -249,10 +249,12 @@ void task_high(void)
 	counter = SEM_TEST_START;
 
 	k_thread_create(&coop_thread[0], coop_stack[0], COOP_STACKSIZE,
-			coop_high, NULL, NULL, NULL, K_PRIO_COOP(3), 0, 0);
+			coop_high, NULL, NULL, NULL, K_PRIO_COOP(3), 0,
+			K_NO_WAIT);
 
 	k_thread_create(&coop_thread[1], coop_stack[1], COOP_STACKSIZE,
-			coop_low, NULL, NULL, NULL, K_PRIO_COOP(7), 0, 0);
+			coop_low, NULL, NULL, NULL, K_PRIO_COOP(7), 0,
+			K_NO_WAIT);
 
 	counter = FIFO_TEST_START;
 	fifo_tests(THIRD_SECOND, &task_high_state, my_fifo_get, k_sem_take);
@@ -408,7 +410,7 @@ void test_pending(void)
 	offload2.sem = &end_test_sem;
 	k_work_submit_to_queue(&offload_work_q, &offload2.work_item);
 
-	timer_end_tick = 0;
+	timer_end_tick = 0U;
 	k_sem_give(&start_test_sem);    /* start timer tests */
 
 	/*
@@ -438,7 +440,7 @@ void test_pending(void)
 void test_main(void)
 {
 	ztest_test_suite(pend,
-			ztest_unit_test(test_pending));
+			ztest_1cpu_unit_test(test_pending));
 	ztest_run_test_suite(pend);
 }
 

@@ -42,7 +42,8 @@ static struct k_work_q offload_work_q;
 static K_THREAD_STACK_DEFINE(offload_work_q_stack,
 			     CONFIG_OFFLOAD_WORKQUEUE_STACK_SIZE);
 
-#define STACK_SIZE 1024
+#define STACK_SIZE (1024 + CONFIG_TEST_EXTRA_STACKSIZE)
+
 static K_THREAD_STACK_DEFINE(stack1, STACK_SIZE);
 static K_THREAD_STACK_DEFINE(stack2, STACK_SIZE);
 
@@ -77,18 +78,30 @@ void critical_rtn(struct k_work *unused)
  *
  * @brief Common code for invoking offload work
  *
+ * @param tag text identifying the invocation context
+ *
  * @param count number of critical section calls made thus far
  *
  * @return number of critical section calls made by a thread
  */
 
-u32_t critical_loop(u32_t count)
+u32_t critical_loop(const char *tag,
+		    u32_t count)
 {
+	s64_t now;
+	s64_t last;
 	s64_t mseconds;
 
-	mseconds = k_uptime_get();
-	while (k_uptime_get() < mseconds + NUM_MILLISECONDS) {
+	last = mseconds = k_uptime_get();
+	TC_PRINT("Start %s at %u\n", tag, (u32_t)last);
+	while (((now = k_uptime_get())) < mseconds + NUM_MILLISECONDS) {
 		struct k_work work_item;
+
+		if (now < last) {
+			TC_PRINT("Time went backwards: %u < %u\n",
+				 (u32_t)now, (u32_t)last);
+		}
+		last = now;
 
 		k_work_init(&work_item, critical_rtn);
 		k_work_submit_to_queue(&offload_work_q, &work_item);
@@ -102,6 +115,7 @@ u32_t critical_loop(u32_t count)
 		 */
 #endif
 	}
+	TC_PRINT("End %s at %u\n", tag, (u32_t)now);
 
 	return count;
 }
@@ -123,13 +137,13 @@ void alternate_thread(void *arg1, void *arg2, void *arg3)
 
 	k_sem_take(&ALT_SEM, K_FOREVER);        /* Wait to be activated */
 
-	alt_thread_iterations = critical_loop(alt_thread_iterations);
+	alt_thread_iterations = critical_loop("alt1", alt_thread_iterations);
 
 	k_sem_give(&REGRESS_SEM);
 
 	k_sem_take(&ALT_SEM, K_FOREVER);        /* Wait to be re-activated */
 
-	alt_thread_iterations = critical_loop(alt_thread_iterations);
+	alt_thread_iterations = critical_loop("alt2", alt_thread_iterations);
 
 	k_sem_give(&REGRESS_SEM);
 }
@@ -147,15 +161,15 @@ void alternate_thread(void *arg1, void *arg2, void *arg3)
 
 void regression_thread(void *arg1, void *arg2, void *arg3)
 {
-	u32_t ncalls = 0;
+	u32_t ncalls = 0U;
 
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
-	k_sem_give(&ALT_SEM);   /* Activate alternate_tast() */
+	k_sem_give(&ALT_SEM);   /* Activate alternate_thread() */
 
-	ncalls = critical_loop(ncalls);
+	ncalls = critical_loop("reg1", ncalls);
 
 	/* Wait for alternate_thread() to complete */
 	zassert_true(k_sem_take(&REGRESS_SEM, TEST_TIMEOUT) == 0,
@@ -164,11 +178,12 @@ void regression_thread(void *arg1, void *arg2, void *arg3)
 	zassert_equal(critical_var, ncalls + alt_thread_iterations,
 		      "Unexpected value for <critical_var>");
 
+	TC_PRINT("Enable timeslicing at %u\n", k_uptime_get_32());
 	k_sched_time_slice_set(10, 10);
 
 	k_sem_give(&ALT_SEM);   /* Re-activate alternate_thread() */
 
-	ncalls = critical_loop(ncalls);
+	ncalls = critical_loop("reg2", ncalls);
 
 	/* Wait for alternate_thread() to finish */
 	zassert_true(k_sem_take(&REGRESS_SEM, TEST_TIMEOUT) == 0,
@@ -183,8 +198,8 @@ void regression_thread(void *arg1, void *arg2, void *arg3)
 
 static void init_objects(void)
 {
-	critical_var = 0;
-	alt_thread_iterations = 0;
+	critical_var = 0U;
+	alt_thread_iterations = 0U;
 	k_work_q_start(&offload_work_q,
 		       offload_work_q_stack,
 		       K_THREAD_STACK_SIZEOF(offload_work_q_stack),
@@ -195,11 +210,11 @@ static void start_threads(void)
 {
 	k_thread_create(&thread1, stack1, STACK_SIZE,
 			alternate_thread, NULL, NULL, NULL,
-			K_PRIO_PREEMPT(12), 0, 0);
+			K_PRIO_PREEMPT(12), 0, K_NO_WAIT);
 
 	k_thread_create(&thread2, stack2, STACK_SIZE,
 			regression_thread, NULL, NULL, NULL,
-			K_PRIO_PREEMPT(12), 0, 0);
+			K_PRIO_PREEMPT(12), 0, K_NO_WAIT);
 }
 
 /**
@@ -222,7 +237,7 @@ void test_critical(void)
 void test_main(void)
 {
 	ztest_test_suite(kernel_critical,
-			 ztest_unit_test(test_critical)
+			 ztest_1cpu_unit_test(test_critical)
 			 );
 	ztest_run_test_suite(kernel_critical);
 }

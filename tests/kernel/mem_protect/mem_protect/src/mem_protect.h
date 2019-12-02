@@ -25,29 +25,19 @@ extern bool valid_fault;
 #define MEM_DOMAIN_STACK_SIZE CONFIG_MAIN_STACK_SIZE
 #define MEM_PARTITION_INIT_NUM (1)
 
-#if defined(CONFIG_ARM)
-
-#ifdef CONFIG_BOARD_MPS2_AN385
-#define MEM_REGION_ALLOC (1024)
-#else
-#define MEM_REGION_ALLOC (32)
-#endif  /* CONFIG_BOARD_MPS2_AN385 */
-
-#elif defined(CONFIG_X86)
+#if defined(CONFIG_X86)
 #define MEM_REGION_ALLOC (4096)
 #elif defined(CONFIG_ARC)
 #define MEM_REGION_ALLOC (STACK_ALIGN)
+#elif defined(CONFIG_ARM)
+#define MEM_REGION_ALLOC (Z_THREAD_MIN_STACK_ALIGN)
 #else
 #error "Test suite not compatible for the given architecture"
 #endif
 #define MEM_DOMAIN_ALIGNMENT __aligned(MEM_REGION_ALLOC)
 
 /* for kobject.c */
-#ifdef CONFIG_BOARD_MPS2_AN385
-#define KOBJECT_STACK_SIZE CONFIG_MAIN_STACK_SIZE
-#else
-#define KOBJECT_STACK_SIZE 512
-#endif
+#define KOBJECT_STACK_SIZE (512 + CONFIG_TEST_EXTRA_STACKSIZE)
 
 /* Sync semaphore */
 extern struct k_sem sync_sem;

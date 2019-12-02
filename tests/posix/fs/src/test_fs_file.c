@@ -5,6 +5,7 @@
  */
 
 #include <string.h>
+#include <fcntl.h>
 #include <posix/unistd.h>
 #include "test_fs.h"
 
@@ -15,82 +16,65 @@ static int test_file_open(void)
 {
 	int res;
 
-	TC_PRINT("\nOpen tests:\n");
-
 	res = open(TEST_FILE, O_RDWR);
-	if (res < 0) {
-		TC_PRINT("Failed opening file [%d]\n", res);
-		return res;
-	}
+	zassert_true(res >= 0, "Failed opening file: %d, errno=%d\n", res, errno);
 
 	file = res;
-
-	TC_PRINT("Opened file %s\n", TEST_FILE);
 
 	return 0;
 }
 
 int test_file_write(void)
 {
-	int brw;
-	int res;
-
-	TC_PRINT("\nWrite tests:\n");
+	ssize_t brw;
+	off_t res;
 
 	res = lseek(file, 0, SEEK_SET);
-	if (res) {
-		TC_PRINT("lseek failed [%d]\n", res);
-		close(file);
-		return res;
-	}
-
-	TC_PRINT("Data written:\"%s\"\n\n", test_str);
-
-	brw = write(file, (char *)test_str, strlen(test_str));
-	if (brw < 0) {
-		TC_PRINT("Failed writing to file [%d]\n", brw);
-		close(file);
-		return brw;
-	}
-
-	if (brw < strlen(test_str)) {
-		TC_PRINT("Unable to complete write. Volume full.\n");
-		TC_PRINT("Number of bytes written: [%d]\n", brw);
+	if (res != 0) {
+		TC_PRINT("lseek failed [%d]\n", (int)res);
 		close(file);
 		return TC_FAIL;
 	}
 
-	TC_PRINT("Data successfully written!\n");
+	brw = write(file, (char *)test_str, strlen(test_str));
+	if (brw < 0) {
+		TC_PRINT("Failed writing to file [%d]\n", (int)brw);
+		close(file);
+		return TC_FAIL;
+	}
+
+	if (brw < strlen(test_str)) {
+		TC_PRINT("Unable to complete write. Volume full.\n");
+		TC_PRINT("Number of bytes written: [%d]\n", (int)brw);
+		close(file);
+		return TC_FAIL;
+	}
 
 	return res;
 }
 
 static int test_file_read(void)
 {
-	int brw;
-	int res;
+	ssize_t brw;
+	off_t res;
 	char read_buff[80];
 	size_t sz = strlen(test_str);
 
-	TC_PRINT("\nRead tests:\n");
-
 	res = lseek(file, 0, SEEK_SET);
-	if (res) {
-		TC_PRINT("lseek failed [%d]\n", res);
+	if (res != 0) {
+		TC_PRINT("lseek failed [%d]\n", (int)res);
 		close(file);
-		return res;
+		return TC_FAIL;
 	}
 
 	brw = read(file, read_buff, sz);
 	if (brw < 0) {
-		TC_PRINT("Failed reading file [%d]\n", brw);
+		TC_PRINT("Failed reading file [%d]\n", (int)brw);
 		close(file);
-		return brw;
+		return TC_FAIL;
 	}
 
 	read_buff[brw] = 0;
-
-	TC_PRINT("Data read:\"%s\"\n\n", read_buff);
 
 	if (strcmp(test_str, read_buff)) {
 		TC_PRINT("Error - Data read does not match data written\n");
@@ -98,7 +82,32 @@ static int test_file_read(void)
 		return TC_FAIL;
 	}
 
-	TC_PRINT("Data read matches data written\n");
+	/* Now test after non-zero lseek. */
+
+	res = lseek(file, 2, SEEK_SET);
+	if (res != 0) {
+		TC_PRINT("lseek failed [%d]\n", (int)res);
+		close(file);
+		return TC_FAIL;
+	}
+
+	brw = read(file, read_buff, sizeof(read_buff));
+	if (brw < 0) {
+		TC_PRINT("Failed reading file [%d]\n", (int)brw);
+		close(file);
+		return TC_FAIL;
+	}
+
+	/* Check for array overrun */
+	brw = (brw < 80) ? brw : brw - 1;
+
+	read_buff[brw] = 0;
+
+	if (strcmp(test_str + 2, read_buff)) {
+		TC_PRINT("Error - Data read does not match data written\n");
+		TC_PRINT("Data read:\"%s\"\n\n", read_buff);
+		return TC_FAIL;
+	}
 
 	return res;
 }
@@ -107,15 +116,8 @@ static int test_file_close(void)
 {
 	int res;
 
-	TC_PRINT("\nClose tests:\n");
-
 	res = close(file);
-	if (res) {
-		TC_PRINT("Error closing file [%d]\n", res);
-		return res;
-	}
-
-	TC_PRINT("Closed file %s\n", TEST_FILE);
+	zassert_true(res == 0, "Failed closing file: %d, errno=%d\n", res, errno);
 
 	return res;
 }
@@ -124,15 +126,11 @@ static int test_file_delete(void)
 {
 	int res;
 
-	TC_PRINT("\nDelete tests:\n");
-
 	res = unlink(TEST_FILE);
 	if (res) {
 		TC_PRINT("Error deleting file [%d]\n", res);
 		return res;
 	}
-
-	TC_PRINT("File (%s) deleted successfully!\n", TEST_FILE);
 
 	return res;
 }
@@ -185,4 +183,15 @@ void test_fs_close(void)
 void test_fs_unlink(void)
 {
 	zassert_true(test_file_delete() == TC_PASS, NULL);
+}
+
+void test_fs_fd_leak(void)
+{
+	const int reps =
+	    MAX(CONFIG_POSIX_MAX_OPEN_FILES, CONFIG_POSIX_MAX_FDS) + 5;
+
+	for (int i = 0; i < reps; i++) {
+		test_fs_open();
+		test_fs_close();
+	}
 }

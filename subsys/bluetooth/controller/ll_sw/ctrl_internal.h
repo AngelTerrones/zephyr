@@ -10,13 +10,16 @@ enum llcp {
 	LLCP_CONN_UPD,
 	LLCP_CHAN_MAP,
 
+	/*
+	 * LLCP_TERMINATE,
+	 * LLCP_FEATURE_EXCHANGE,
+	 * LLCP_VERSION_EXCHANGE,
+	 */
+
 #if defined(CONFIG_BT_CTLR_LE_ENC)
 	LLCP_ENCRYPTION,
 #endif /* CONFIG_BT_CTLR_LE_ENC */
 
-	LLCP_FEATURE_EXCHANGE,
-	LLCP_VERSION_EXCHANGE,
-	/* LLCP_TERMINATE, */
 	LLCP_CONNECTION_PARAM_REQ,
 
 #if defined(CONFIG_BT_CTLR_LE_PING)
@@ -133,23 +136,13 @@ struct connection {
 	enum  llcp llcp_type;
 	union {
 		struct {
-			enum {
-				LLCP_CUI_STATE_INPROG,
-				LLCP_CUI_STATE_USE,
-				LLCP_CUI_STATE_SELECT
-			} state:2 __packed;
-			u8_t  is_internal:1;
-			u16_t interval;
-			u16_t latency;
-			u16_t timeout;
 			u16_t instant;
-			u32_t win_offset_us;
-			u8_t  win_size;
 			u16_t *pdu_win_offset;
 			u32_t ticks_anchor;
 		} conn_upd;
+
 		struct {
-			u8_t  initiate;
+			u8_t  initiate:1;
 			u8_t  chm[5];
 			u16_t instant;
 		} chan_map;
@@ -164,19 +157,44 @@ struct connection {
 		} phy_upd_ind;
 #endif /* CONFIG_BT_CTLR_PHY */
 
+#if defined(CONFIG_BT_CTLR_LE_ENC)
 		struct {
-			u8_t  initiate;
+			enum {
+				LLCP_ENC_STATE_INPROG,
+				LLCP_ENC_STATE_INIT,
+				LLCP_ENC_STATE_LTK_WAIT,
+			} state:2 __packed;
 			u8_t  error_code;
-			u8_t  rand[8];
-			u8_t  ediv[2];
-			u8_t  ltk[16];
 			u8_t  skd[16];
 		} encryption;
+#endif /* CONFIG_BT_CTLR_LE_ENC */
 	} llcp;
 
-	u32_t llcp_features;
+	struct {
+		u8_t  req;
+		u8_t  ack;
+		enum {
+			LLCP_CUI_STATE_INPROG,
+			LLCP_CUI_STATE_USE,
+			LLCP_CUI_STATE_SELECT
+		} state:2 __packed;
+		u8_t  cmd:1;
+		u16_t interval;
+		u16_t latency;
+		u16_t timeout;
+		u32_t win_offset_us;
+		u8_t  win_size;
+	} llcp_cu;
 
 	struct {
+		u8_t  req;
+		u8_t  ack;
+		u32_t features;
+	} llcp_feature;
+
+	struct {
+		u8_t  req;
+		u8_t  ack;
 		u8_t  tx:1;
 		u8_t  rx:1;
 		u8_t  version_number;
@@ -195,6 +213,16 @@ struct connection {
 		} radio_pdu_node_rx;
 	} llcp_terminate;
 
+#if defined(CONFIG_BT_CTLR_LE_ENC)
+	struct {
+		u8_t req;
+		u8_t ack;
+		u8_t ediv[2];
+		u8_t rand[8];
+		u8_t ltk[16];
+	} llcp_enc;
+#endif /* CONFIG_BT_CTLR_LE_ENC */
+
 #if defined(CONFIG_BT_CTLR_CONN_PARAM_REQ)
 	struct {
 		u8_t  req;
@@ -210,7 +238,8 @@ struct connection {
 		u8_t  cmd:1;
 		u8_t  disabled:1;
 		u8_t  status;
-		u16_t interval;
+		u16_t interval_min;
+		u16_t interval_max;
 		u16_t latency;
 		u16_t timeout;
 		u8_t  preferred_periodicity;
@@ -231,17 +260,26 @@ struct connection {
 	struct {
 		u8_t  req;
 		u8_t  ack;
-		u8_t  state:2;
-#define LLCP_LENGTH_STATE_REQ        0
-#define LLCP_LENGTH_STATE_ACK_WAIT   1
-#define LLCP_LENGTH_STATE_RSP_WAIT   2
-#define LLCP_LENGTH_STATE_RESIZE     3
+		u8_t  state:3;
+#define LLCP_LENGTH_STATE_REQ                 0
+#define LLCP_LENGTH_STATE_REQ_ACK_WAIT        1
+#define LLCP_LENGTH_STATE_RSP_WAIT            2
+#define LLCP_LENGTH_STATE_RSP_ACK_WAIT        3
+#define LLCP_LENGTH_STATE_RESIZE              4
+#define LLCP_LENGTH_STATE_RESIZE_RSP          5
+#define LLCP_LENGTH_STATE_RESIZE_RSP_ACK_WAIT 6
 		u16_t rx_octets;
 		u16_t tx_octets;
 #if defined(CONFIG_BT_CTLR_PHY)
 		u16_t rx_time;
 		u16_t tx_time;
 #endif /* CONFIG_BT_CTLR_PHY */
+		struct {
+			u16_t tx_octets;
+#if defined(CONFIG_BT_CTLR_PHY)
+			u16_t tx_time;
+#endif /* CONFIG_BT_CTLR_PHY */
+		} cache;
 	} llcp_length;
 #endif /* CONFIG_BT_CTLR_DATA_LENGTH */
 
@@ -261,15 +299,6 @@ struct connection {
 	} llcp_phy;
 #endif /* CONFIG_BT_CTLR_PHY */
 
-	u8_t  sn:1;
-	u8_t  nesn:1;
-	u8_t  pause_rx:1;
-	u8_t  pause_tx:1;
-	u8_t  enc_rx:1;
-	u8_t  enc_tx:1;
-	u8_t  refresh:1;
-	u8_t  empty:1;
-
 	struct ccm ccm_rx;
 	struct ccm ccm_tx;
 
@@ -280,6 +309,23 @@ struct connection {
 	struct radio_pdu_node_tx *pkt_tx_last;
 	u8_t  packet_tx_head_len;
 	u8_t  packet_tx_head_offset;
+
+	u8_t  sn:1;
+	u8_t  nesn:1;
+	u8_t  pause_rx:1;
+	u8_t  pause_tx:1;
+	u8_t  enc_rx:1;
+	u8_t  enc_tx:1;
+	u8_t  refresh:1;
+	u8_t  empty:1;
+
+	/* Detect empty L2CAP start frame */
+	u8_t  start_empty:1;
+
+#if defined(CONFIG_BT_CTLR_DATA_LENGTH) || defined(CONFIG_BT_CTLR_PHY)
+	u8_t evt_len_upd:1;
+	u8_t evt_len_adv:1;
+#endif
 
 #if defined(CONFIG_BT_CTLR_CONN_RSSI)
 	u8_t  rssi_latest;
@@ -293,18 +339,6 @@ struct pdu_data_q_tx {
 	u16_t  handle;
 	struct radio_pdu_node_tx *node_tx;
 };
-
-/* Extra bytes for enqueued rx_node metadata: rssi (always) and resolving
- * index and directed adv report (with privacy or extended scanner filter
- * policies enabled).
- * Note: to simplify the code, both bytes are allocated even if only one of
- * the options is selected.
- */
-#if defined(CONFIG_BT_CTLR_PRIVACY) || defined(CONFIG_BT_CTLR_EXT_SCAN_FP)
-#define PDU_AC_SIZE_EXTRA 3
-#else
-#define PDU_AC_SIZE_EXTRA 1
-#endif /* CONFIG_BT_CTLR_PRIVACY */
 
 /* Minimum Rx Data allocation size */
 #define PACKET_RX_DATA_SIZE_MIN \
@@ -329,9 +363,9 @@ struct pdu_data_q_tx {
 
 #define LL_MEM_RX_POOL_SZ (MROUND(offsetof(struct radio_pdu_node_rx, \
 					   pdu_data) + \
-				  max((PDU_AC_SIZE_MAX + PDU_AC_SIZE_EXTRA), \
+				  MAX((PDU_AC_SIZE_MAX + PDU_AC_SIZE_EXTRA), \
 				      (offsetof(struct pdu_data, lldata) + \
-				       RADIO_LL_LENGTH_OCTETS_RX_MAX))) * \
+				       LL_LENGTH_OCTETS_RX_MAX))) * \
 			   (RADIO_PACKET_COUNT_RX_MAX + 3))
 
 #define LL_MEM_RX_LINK_POOL (sizeof(void *) * 2 * ((RADIO_PACKET_COUNT_RX_MAX +\

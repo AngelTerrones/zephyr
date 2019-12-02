@@ -11,43 +11,30 @@
  */
 
 #include <zephyr.h>
-#include <misc/printk.h>
+#include <sys/printk.h>
 #include <device.h>
-#include <pwm.h>
-#include <board.h>
+#include <drivers/pwm.h>
 
-#if defined(CONFIG_SOC_STM32F401XE) || defined(CONFIG_SOC_STM32F412ZG) || \
-	defined(CONFIG_SOC_STM32F413XH) || defined(CONFIG_SOC_STM32L476XG) || \
-	defined(CONFIG_SOC_STM32F407XG)
-#define PWM_DRIVER CONFIG_PWM_STM32_2_DEV_NAME
-#define PWM_CHANNEL 1
-#elif CONFIG_SOC_STM32F103XB
-#define PWM_DRIVER CONFIG_PWM_STM32_1_DEV_NAME
-#define PWM_CHANNEL 1
-#elif defined(CONFIG_SOC_QUARK_SE_C1000) || defined(CONFIG_SOC_QUARK_D2000)
-#define PWM_DRIVER CONFIG_PWM_QMSI_DEV_NAME
-#define PWM_CHANNEL 0
-#elif defined(CONFIG_BOARD_HEXIWEAR_K64)
-#define PWM_DRIVER	GREEN_PWM_NAME
-#define PWM_CHANNEL	GREEN_PWM_CHANNEL
-#elif defined(CONFIG_BOARD_COLIBRI_IMX7D_M4)
-#define PWM_DRIVER	PWM_1_LABEL
-#define PWM_CHANNEL	0
+#if defined(DT_ALIAS_PWM_LED0_PWMS_CONTROLLER) && defined(DT_ALIAS_PWM_LED0_PWMS_CHANNEL)
+/* get the defines from dt (based on alias 'pwm-led0') */
+#define PWM_DRIVER	DT_ALIAS_PWM_LED0_PWMS_CONTROLLER
+#define PWM_CHANNEL	DT_ALIAS_PWM_LED0_PWMS_CHANNEL
 #else
 #error "Choose supported PWM driver"
 #endif
 
-/* in micro second */
-#define MIN_PERIOD	(USEC_PER_SEC / 64)
+/* in microseconds */
+#define MIN_PERIOD	(USEC_PER_SEC / 64U)
 
-/* in micro second */
+/* in microseconds */
 #define MAX_PERIOD	USEC_PER_SEC
 
 void main(void)
 {
 	struct device *pwm_dev;
-	u32_t period = MAX_PERIOD;
-	u8_t dir = 0;
+	u32_t max_period;
+	u32_t period;
+	u8_t dir = 0U;
 
 	printk("PWM demo app-blink LED\n");
 
@@ -57,29 +44,46 @@ void main(void)
 		return;
 	}
 
+	/* In case the default MAX_PERIOD value cannot be set for some PWM
+	 * hardware, try to decrease the value until it fits, but no further
+	 * than to the value of MIN_PERIOD muliplied by four (to allow the
+	 * sample to actually show some blinking with changing frequency).
+	 */
+	max_period = MAX_PERIOD;
+	while (pwm_pin_set_usec(pwm_dev, PWM_CHANNEL,
+				max_period, max_period / 2U)) {
+		max_period /= 2U;
+		if (max_period < (4U * MIN_PERIOD)) {
+			printk("This sample needs to set a period that is "
+			       "not supported by the used PWM driver.");
+			return;
+		}
+	}
+
+	period = max_period;
 	while (1) {
 		if (pwm_pin_set_usec(pwm_dev, PWM_CHANNEL,
-				     period, period / 2)) {
+				     period, period / 2U)) {
 			printk("pwm pin set fails\n");
 			return;
 		}
 
 		if (dir) {
-			period *= 2;
+			period *= 2U;
 
-			if (period > MAX_PERIOD) {
-				dir = 0;
-				period = MAX_PERIOD;
+			if (period > max_period) {
+				dir = 0U;
+				period = max_period;
 			}
 		} else {
-			period /= 2;
+			period /= 2U;
 
 			if (period < MIN_PERIOD) {
-				dir = 1;
+				dir = 1U;
 				period = MIN_PERIOD;
 			}
 		}
 
-		k_sleep(MSEC_PER_SEC * 4);
+		k_sleep(MSEC_PER_SEC * 4U);
 	}
 }

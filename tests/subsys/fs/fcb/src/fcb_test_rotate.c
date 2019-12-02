@@ -13,7 +13,7 @@ void fcb_test_rotate(void)
 	int rc;
 	int old_id;
 	struct fcb_entry loc;
-	u8_t test_data[128];
+	u8_t test_data[128] = {0};
 	int elem_cnts[2] = {0, 0};
 	int cnts[2];
 	struct append_arg aa_arg = {
@@ -33,7 +33,7 @@ void fcb_test_rotate(void)
 	 */
 	while (1) {
 		rc = fcb_append(fcb, sizeof(test_data), &loc);
-		if (rc == FCB_ERR_NOSPACE) {
+		if (rc == -ENOSPC) {
 			break;
 		}
 		if (loc.fe_sector == &test_fcb_sector[0]) {
@@ -61,7 +61,7 @@ void fcb_test_rotate(void)
 	zassert_true(fcb->f_active_id == old_id,
 		     "flash location should be kept");
 
-	memset(cnts, 0, sizeof(cnts));
+	(void)memset(cnts, 0, sizeof(cnts));
 	rc = fcb_walk(fcb, NULL, fcb_test_cnt_elems_cb, &aa_arg);
 	zassert_true(rc == 0, "fcb_walk call failure");
 	zassert_true(aa_arg.elem_cnts[0] == elem_cnts[0] ||
@@ -89,7 +89,7 @@ void fcb_test_rotate(void)
 	zassert_true(fcb->f_active_id == old_id,
 		     "flash location should be kept");
 
-	memset(cnts, 0, sizeof(cnts));
+	(void)memset(cnts, 0, sizeof(cnts));
 	rc = fcb_walk(fcb, NULL, fcb_test_cnt_elems_cb, &aa_arg);
 	zassert_true(rc == 0, "fcb_walk call failure");
 	zassert_true(aa_arg.elem_cnts[0] == 1 || aa_arg.elem_cnts[1] == 1,

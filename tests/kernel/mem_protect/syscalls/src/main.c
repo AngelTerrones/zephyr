@@ -11,21 +11,21 @@
 
 #define BUF_SIZE	32
 
-__kernel char kernel_string[BUF_SIZE];
-__kernel char kernel_buf[BUF_SIZE];
-char user_string[BUF_SIZE];
+char kernel_string[BUF_SIZE];
+char kernel_buf[BUF_SIZE];
+ZTEST_BMEM char user_string[BUF_SIZE];
 
-size_t _impl_string_nlen(char *src, size_t maxlen, int *err)
+size_t z_impl_string_nlen(char *src, size_t maxlen, int *err)
 {
 	return z_user_string_nlen(src, maxlen, err);
 }
 
-Z_SYSCALL_HANDLER(string_nlen, src, maxlen, err)
+static inline size_t z_vrfy_string_nlen(char *src, size_t maxlen, int *err)
 {
 	int err_copy;
 	size_t ret;
 
-	ret = _impl_string_nlen((char *)src, maxlen, &err_copy);
+	ret = z_impl_string_nlen((char *)src, maxlen, &err_copy);
 	if (!err_copy && Z_SYSCALL_MEMORY_READ(src, ret + 1)) {
 		err_copy = -1;
 	}
@@ -34,8 +34,9 @@ Z_SYSCALL_HANDLER(string_nlen, src, maxlen, err)
 
 	return ret;
 }
+#include <syscalls/string_nlen_mrsh.c>
 
-int _impl_string_alloc_copy(char *src)
+int z_impl_string_alloc_copy(char *src)
 {
 	if (!strcmp(src, kernel_string)) {
 		return 0;
@@ -44,7 +45,7 @@ int _impl_string_alloc_copy(char *src)
 	}
 }
 
-Z_SYSCALL_HANDLER(string_alloc_copy, src)
+static inline int z_vrfy_string_alloc_copy(char *src)
 {
 	char *src_copy;
 	int ret;
@@ -54,13 +55,14 @@ Z_SYSCALL_HANDLER(string_alloc_copy, src)
 		return -1;
 	}
 
-	ret = _impl_string_alloc_copy(src_copy);
+	ret = z_impl_string_alloc_copy(src_copy);
 	k_free(src_copy);
 
 	return ret;
 }
+#include <syscalls/string_alloc_copy_mrsh.c>
 
-int _impl_string_copy(char *src)
+int z_impl_string_copy(char *src)
 {
 	if (!strcmp(src, kernel_string)) {
 		return 0;
@@ -69,7 +71,7 @@ int _impl_string_copy(char *src)
 	}
 }
 
-Z_SYSCALL_HANDLER(string_copy, src)
+static inline int z_vrfy_string_copy(char *src)
 {
 	int ret = z_user_string_copy(kernel_buf, (char *)src, BUF_SIZE);
 
@@ -77,22 +79,65 @@ Z_SYSCALL_HANDLER(string_copy, src)
 		return ret;
 	}
 
-	return _impl_string_copy(kernel_buf);
+	return z_impl_string_copy(kernel_buf);
 }
+#include <syscalls/string_copy_mrsh.c>
 
 /* Not actually used, but will copy wrong string if called by mistake instead
  * of the handler
  */
-int _impl_to_copy(char *dest)
+int z_impl_to_copy(char *dest)
 {
 	memcpy(dest, kernel_string, BUF_SIZE);
 	return 0;
 }
 
-Z_SYSCALL_HANDLER(to_copy, dest)
+static inline int z_vrfy_to_copy(char *dest)
 {
 	return z_user_to_copy((char *)dest, user_string, BUF_SIZE);
 }
+#include <syscalls/to_copy_mrsh.c>
+
+int z_impl_syscall_arg64(u64_t arg)
+{
+	/* "Hash" (heh) the return to avoid accidental false positives
+	 * due to using common/predictable values.
+	 */
+	return (int)(arg + 0x8c32a9eda4ca2621ULL + (size_t)&kernel_string);
+}
+
+static inline int z_vrfy_syscall_arg64(u64_t arg)
+{
+	return z_impl_syscall_arg64(arg);
+}
+#include <syscalls/syscall_arg64_mrsh.c>
+
+/* Bigger 64 bit arg syscall to exercise marshalling 7+ words of
+ * arguments (this one happens to need 9), and to test generation of
+ * 64 bit return values.
+ */
+u64_t z_impl_syscall_arg64_big(u32_t arg1, u32_t arg2,
+			       u64_t arg3, u32_t arg4,
+			       u32_t arg5, u64_t arg6)
+{
+	u64_t args[] = { arg1, arg2, arg3, arg4, arg5, arg6 };
+	u64_t ret = 0xae751a24ef464cc0ULL;
+
+	for (int i = 0; i < ARRAY_SIZE(args); i++) {
+		ret += args[i];
+		ret = (ret << 11) | (ret >> 53);
+	}
+
+	return ret;
+}
+
+static inline u64_t z_vrfy_syscall_arg64_big(u32_t arg1, u32_t arg2,
+					     u64_t arg3, u32_t arg4,
+					     u32_t arg5, u64_t arg6)
+{
+	return z_impl_syscall_arg64_big(arg1, arg2, arg3, arg4, arg5, arg6);
+}
+#include <syscalls/syscall_arg64_big_mrsh.c>
 
 /**
  * @brief Test to demonstrate usage of z_user_string_nlen()
@@ -110,7 +155,7 @@ void test_string_nlen(void)
 	size_t ret;
 
 	ret = string_nlen(kernel_string, BUF_SIZE, &err);
-	if (_arch_is_user_context()) {
+	if (arch_is_user_context()) {
 		zassert_equal(err, -1,
 			      "kernel string did not fault on user access");
 	} else {
@@ -199,6 +244,17 @@ void test_to_copy(void)
 	zassert_equal(ret, 0, "string should have matched");
 }
 
+void test_arg64(void)
+{
+	zassert_equal(syscall_arg64(54321),
+		      z_impl_syscall_arg64(54321),
+		      "syscall didn't match impl");
+
+	zassert_equal(syscall_arg64_big(1, 2, 3, 4, 5, 6),
+		      z_impl_syscall_arg64_big(1, 2, 3, 4, 5, 6),
+		      "syscall didn't match impl");
+}
+
 K_MEM_POOL_DEFINE(test_pool, BUF_SIZE, BUF_SIZE, 4, 4);
 
 void test_main(void)
@@ -212,6 +268,7 @@ void test_main(void)
 			 ztest_user_unit_test(test_string_nlen),
 			 ztest_user_unit_test(test_to_copy),
 			 ztest_user_unit_test(test_user_string_copy),
-			 ztest_user_unit_test(test_user_string_alloc_copy));
+			 ztest_user_unit_test(test_user_string_alloc_copy),
+			 ztest_user_unit_test(test_arg64));
 	ztest_run_test_suite(syscalls);
 }

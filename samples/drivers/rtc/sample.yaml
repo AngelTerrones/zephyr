@@ -1,6 +1,0 @@
-sample:
-  name: RTC Driver Sample
-tests:
-  test:
-    tags: drivers
-    depends_on: rtc

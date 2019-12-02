@@ -14,32 +14,36 @@
 #include <tc_util.h>
 #include <ksched.h>
 #include "timing_info.h"
+#include <app_memory/app_memdomain.h>
 
+K_APPMEM_PARTITION_DEFINE(bench_ptn);
+struct k_mem_domain bench_domain;
 
 extern char sline[256];
-extern u64_t __end_drop_to_usermode_time;
+extern u64_t arch_timing_enter_user_mode_end;
 
 u32_t drop_to_user_mode_end_time, drop_to_user_mode_start_time;
 u32_t user_thread_creation_end_time, user_thread_creation_start_time;
 
-__kernel struct k_thread my_thread_user;
+struct k_thread my_thread_user;
 K_THREAD_STACK_EXTERN(my_stack_area);
 K_THREAD_STACK_EXTERN(my_stack_area_0);
 
 
 /******************************************************************************/
 /* syscall needed to read timer value when in user space */
-u32_t _impl_userspace_read_timer_value(void)
+u32_t z_impl_userspace_read_timer_value(void)
 {
 	TIMING_INFO_PRE_READ();
 	return TIMING_INFO_GET_TIMER_VALUE();
 }
 
-Z_SYSCALL_HANDLER(userspace_read_timer_value)
+static inline u32_t z_vrfy_userspace_read_timer_value(void)
 {
 	TIMING_INFO_PRE_READ();
 	return TIMING_INFO_GET_TIMER_VALUE();
 }
+#include <syscalls/userspace_read_timer_value_mrsh.c>
 
 /******************************************************************************/
 
@@ -50,6 +54,13 @@ void validation_overhead(void);
 
 void userspace_bench(void)
 {
+	struct k_mem_partition *parts[] = {
+		&bench_ptn
+	};
+
+	k_mem_domain_init(&bench_domain, ARRAY_SIZE(parts), parts);
+	k_mem_domain_add_thread(&bench_domain, k_current_get());
+
 	drop_to_user_mode();
 
 	user_thread_creation();
@@ -57,13 +68,12 @@ void userspace_bench(void)
 	syscall_overhead();
 
 	validation_overhead();
-
 }
 /******************************************************************************/
 
 void test_drop_to_user_mode_1(void *p1, void *p2, void *p3)
 {
-	volatile u32_t dummy = 100;
+	volatile u32_t dummy = 100U;
 
 	dummy++;
 }
@@ -79,7 +89,7 @@ void drop_to_user_mode_thread(void *p1, void *p2, void *p3)
 void drop_to_user_mode(void)
 {
 #ifdef SysTick
-	/* Reset the counter so that a interrupt doesn't happen inbetween
+	/* Reset the counter so that a interrupt doesn't happen between
 	 * the benchmark test
 	 */
 	SysTick->VAL = 0;
@@ -90,12 +100,12 @@ void drop_to_user_mode(void)
 	k_thread_create(&my_thread_user, my_stack_area_0, STACK_SIZE,
 			drop_to_user_mode_thread,
 			NULL, NULL, NULL,
-			-1 /*priority*/, K_INHERIT_PERMS, 0);
+			-1 /*priority*/, K_INHERIT_PERMS, K_NO_WAIT);
 
 	k_yield();
 
 	drop_to_user_mode_end_time = (u32_t)
-		SUBTRACT_CLOCK_CYCLES(__end_drop_to_usermode_time);
+		SUBTRACT_CLOCK_CYCLES(arch_timing_enter_user_mode_end);
 
 	u32_t tmp_start_time =
 		SUBTRACT_CLOCK_CYCLES(drop_to_user_mode_start_time);
@@ -125,7 +135,7 @@ void user_thread_creation(void)
 	k_thread_create(&my_thread_user, my_stack_area, STACK_SIZE,
 			test_drop_to_user_mode_1,
 			NULL, NULL, NULL,
-			0 /*priority*/, K_INHERIT_PERMS | K_USER, 0);
+			0 /*priority*/, K_INHERIT_PERMS | K_USER, K_NO_WAIT);
 
 	TIMING_INFO_PRE_READ();
 	user_thread_creation_end_time = TIMING_INFO_GET_TIMER_VALUE();
@@ -146,19 +156,21 @@ void user_thread_creation(void)
 
 /******************************************************************************/
 /* dummy syscalls creation */
-u32_t syscall_overhead_start_time, syscall_overhead_end_time;
+K_APP_BMEM(bench_ptn) u32_t syscall_overhead_start_time,
+	syscall_overhead_end_time;
 
-int _impl_k_dummy_syscall(void)
+int z_impl_k_dummy_syscall(void)
 {
 	return 0;
 }
 
-Z_SYSCALL_HANDLER(k_dummy_syscall)
+static inline int z_vrfy_k_dummy_syscall(void)
 {
 	TIMING_INFO_PRE_READ();
 	syscall_overhead_end_time = TIMING_INFO_GET_TIMER_VALUE();
 	return 0;
 }
+#include <syscalls/k_dummy_syscall_mrsh.c>
 
 
 void syscall_overhead_user_thread(void *p1, void *p2, void *p3)
@@ -177,7 +189,7 @@ void syscall_overhead(void)
 	k_thread_create(&my_thread_user, my_stack_area_0, STACK_SIZE,
 			syscall_overhead_user_thread,
 			NULL, NULL, NULL,
-			-1 /*priority*/, K_INHERIT_PERMS | K_USER, 0);
+			-1 /*priority*/, K_INHERIT_PERMS | K_USER, K_NO_WAIT);
 
 
 	u32_t total_cycles = (u32_t)
@@ -200,12 +212,12 @@ u32_t validation_overhead_obj_init_end_time;
 u32_t validation_overhead_obj_start_time;
 u32_t validation_overhead_obj_end_time;
 
-int _impl_validation_overhead_syscall(void)
+int z_impl_validation_overhead_syscall(void)
 {
 	return 0;
 }
 
-Z_SYSCALL_HANDLER(validation_overhead_syscall)
+static inline int z_vrfy_validation_overhead_syscall(void)
 {
 	TIMING_INFO_PRE_READ();
 	validation_overhead_obj_init_start_time = TIMING_INFO_GET_TIMER_VALUE();
@@ -225,7 +237,7 @@ Z_SYSCALL_HANDLER(validation_overhead_syscall)
 	validation_overhead_obj_end_time = TIMING_INFO_GET_TIMER_VALUE();
 	return status_0 || status_1;
 }
-
+#include <syscalls/validation_overhead_syscall_mrsh.c>
 
 void validation_overhead_user_thread(void *p1, void *p2, void *p3)
 {
@@ -235,14 +247,13 @@ void validation_overhead_user_thread(void *p1, void *p2, void *p3)
 
 void validation_overhead(void)
 {
-
-	k_thread_access_grant(k_current_get(), &test_sema, NULL);
+	k_thread_access_grant(k_current_get(), &test_sema);
 
 
 	k_thread_create(&my_thread_user, my_stack_area, STACK_SIZE,
 			validation_overhead_user_thread,
 			NULL, NULL, NULL,
-			-1 /*priority*/, K_INHERIT_PERMS | K_USER, 0);
+			-1 /*priority*/, K_INHERIT_PERMS | K_USER, K_NO_WAIT);
 
 
 	u32_t total_cycles_obj_init = (u32_t)

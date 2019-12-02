@@ -1,34 +1,41 @@
-zephyr_cc_option_ifdef(CONFIG_LTO -flto)
+# SPDX-License-Identifier: Apache-2.0
+
+if (CONFIG_64BIT)
+	# some gcc versions fail to build without -fPIC
+	zephyr_compile_options(-m64 -fPIC)
+	zephyr_link_libraries(-m64)
+else ()
+	zephyr_compile_options(-m32)
+	zephyr_link_libraries(-m32)
+endif ()
 
 zephyr_compile_options(
-  -fno-freestanding
-  -m32
-  -MMD
-  -MP
   ${ARCH_FLAG}
   -include ${ZEPHYR_BASE}/arch/posix/include/posix_cheats.h
   )
 
-zephyr_compile_options_ifdef(CONFIG_COVERAGE
-  -fprofile-arcs
-  -ftest-coverage
-)
-zephyr_link_libraries_ifdef(CONFIG_COVERAGE
-	-lgcov
-	)
+# @Intent: Obtain compiler specific flags for no freestanding compilation
+toolchain_cc_no_freestanding_options()
 
-if (CONFIG_ASAN)
-	zephyr_compile_options(-fsanitize=address)
-	zephyr_link_libraries(-lasan)
-	zephyr_ld_options(-fsanitize=address)
+zephyr_include_directories(${BOARD_DIR})
+
+if (CONFIG_COVERAGE)
+  toolchain_cc_coverage()
 endif ()
 
-zephyr_compile_definitions(_POSIX_C_SOURCE=200809 _XOPEN_SOURCE _XOPEN_SOURCE_EXTENDED)
+if (CONFIG_ASAN)
+  toolchain_cc_asan()
+endif ()
+
+if (CONFIG_UBSAN)
+  toolchain_cc_ubsan()
+endif ()
+
+zephyr_compile_definitions(_POSIX_C_SOURCE=200809 _XOPEN_SOURCE=600 _XOPEN_SOURCE_EXTENDED)
 
 zephyr_ld_options(
   -ldl
   -pthread
-  -m32
 )
 
 # About the -include directive: The reason to do it this way, is because in this
@@ -40,5 +47,4 @@ zephyr_ld_options(
 # be included in a few zephyr kernel files.
 
 
-add_subdirectory(soc)
 add_subdirectory(core)

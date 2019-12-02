@@ -13,7 +13,8 @@
 #include "timer_model.h"
 #include "cmdline.h"
 #include "toolchain.h"
-#include "posix_trace.h"
+#include <arch/posix/posix_trace.h>
+#include "native_tracing.h"
 
 static int s_argc, test_argc;
 static char **s_argv, **test_argv;
@@ -53,13 +54,15 @@ void native_add_command_line_opts(struct args_struct_t *args)
 			growby = ARGS_ALLOC_CHUNK_SIZE;
 		}
 
-		args_struct = realloc(args_struct,
+		struct args_struct_t *new_args_struct = realloc(args_struct,
 				      (args_aval + growby)*
 				      sizeof(struct args_struct_t));
 		args_aval += growby;
 		/* LCOV_EXCL_START */
-		if (args_struct == NULL) {
+		if (new_args_struct == NULL) {
 			posix_print_error_and_exit("Could not allocate memory");
+		} else {
+			args_struct = new_args_struct;
 		}
 		/* LCOV_EXCL_STOP */
 	}
@@ -89,10 +92,18 @@ void native_add_testargs_option(void)
 		(void *)NULL, NULL,
 		"Any argument that follows will be ignored by the top level, "
 		"and made available for possible tests"},
-
 		ARG_TABLE_ENDMARKER};
 
 	native_add_command_line_opts(testargs_options);
+}
+
+static void print_invalid_opt_error(char *argv)
+{
+	posix_print_error_and_exit("Incorrect option '%s'. Did you misspell it?"
+				   " Is that feature supported in this build?"
+				   "\n",
+				   argv);
+
 }
 
 /**
@@ -104,6 +115,7 @@ void native_handle_cmd_line(int argc, char *argv[])
 {
 	int i;
 
+	native_add_tracing_options();
 	native_add_testargs_option();
 
 	s_argv = argv;
@@ -121,8 +133,7 @@ void native_handle_cmd_line(int argc, char *argv[])
 
 		if (!cmd_parse_one_arg(argv[i], args_struct)) {
 			cmd_print_switches_help(args_struct);
-			posix_print_error_and_exit("Incorrect option '%s'\n",
-						   argv[i]);
+			print_invalid_opt_error(argv[i]);
 		}
 	}
 }

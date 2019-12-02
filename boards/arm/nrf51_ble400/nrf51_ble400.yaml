@@ -5,9 +5,11 @@ arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
+  - xtools
 ram: 16
 supported:
   - ble
+  - i2c
 testing:
   ignore_tags:
     - net

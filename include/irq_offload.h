@@ -8,13 +8,14 @@
  * @file
  * @brief IRQ Offload interface
  */
-#ifndef _IRQ_OFFLOAD_H_
-#define _IRQ_OFFLOAD_H_
+#ifndef ZEPHYR_INCLUDE_IRQ_OFFLOAD_H_
+#define ZEPHYR_INCLUDE_IRQ_OFFLOAD_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#ifdef CONFIG_IRQ_OFFLOAD
 typedef void (*irq_offload_routine_t)(void *parameter);
 
 /**
@@ -30,6 +31,7 @@ typedef void (*irq_offload_routine_t)(void *parameter);
  * interrupt
  */
 void irq_offload(irq_offload_routine_t routine, void *parameter);
+#endif
 
 #ifdef __cplusplus
 }

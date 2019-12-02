@@ -7,6 +7,7 @@
 #include <zephyr.h>
 #include <syscall_handler.h>
 #include <ztest.h>
+#include <kernel_internal.h>
 
 #define SEM_ARRAY_SIZE	16
 
@@ -15,12 +16,12 @@
  */
 extern struct k_sem sem1;
 
-static __kernel struct k_sem semarray[SEM_ARRAY_SIZE];
+static struct k_sem semarray[SEM_ARRAY_SIZE];
 static struct k_sem *dyn_sem[SEM_ARRAY_SIZE];
 
 K_SEM_DEFINE(sem1, 0, 1);
-static __kernel struct k_sem sem2;
-static __kernel char bad_sem[sizeof(struct k_sem)];
+static struct k_sem sem2;
+static char bad_sem[sizeof(struct k_sem)];
 static struct k_sem sem3;
 
 static int test_object(struct k_sem *sem, int retval)
@@ -28,12 +29,12 @@ static int test_object(struct k_sem *sem, int retval)
 	int ret;
 
 	if (retval) {
-		/* Expected to fail; bypass _obj_validation_check() so we don't
+		/* Expected to fail; bypass z_obj_validation_check() so we don't
 		 * fill the logs with spam
 		 */
-		ret = _k_object_validate(_k_object_find(sem), K_OBJ_SEM, 0);
+		ret = z_object_validate(z_object_find(sem), K_OBJ_SEM, 0);
 	} else {
-		ret = _obj_validation_check(_k_object_find(sem), sem,
+		ret = z_obj_validation_check(z_object_find(sem), sem,
 					    K_OBJ_SEM, 0);
 	}
 
@@ -65,8 +66,6 @@ void object_permission_checks(struct k_sem *sem, bool skip_init)
 		      "object should have had sufficient permissions");
 }
 
-extern const k_tid_t _main_thread;
-
 /**
  * @brief Tests to verify object permission
  *
@@ -82,11 +81,7 @@ void test_generic_object(void)
 	zassert_false(test_object(&stack_sem, -EBADF), NULL);
 	zassert_false(test_object((struct k_sem *)&bad_sem, -EBADF), NULL);
 	zassert_false(test_object((struct k_sem *)0xFFFFFFFF, -EBADF), NULL);
-#ifdef CONFIG_APPLICATION_MEMORY
-	zassert_false(test_object(&sem3, -EBADF), NULL);
-#else
 	object_permission_checks(&sem3, false);
-#endif
 	object_permission_checks(&sem1, true);
 	object_permission_checks(&sem2, false);
 
@@ -97,7 +92,7 @@ void test_generic_object(void)
 		/* Give an extra reference to another thread so the object
 		 * doesn't disappear if we revoke our own
 		 */
-		k_object_access_grant(dyn_sem[i], _main_thread);
+		k_object_access_grant(dyn_sem[i], &z_main_thread);
 	}
 
 	/* dynamic object table well-populated with semaphores at this point */

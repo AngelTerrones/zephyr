@@ -1,16 +1,13 @@
-# Kconfig - Private config options for LLDP sample app
+# Private config options for LLDP sample app
 
-#
 # Copyright (c) 2018 Intel Corporation
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 # This sample application will have three network interfaces.
 
 mainmenu "LLDP sample application"
 
-source "$ZEPHYR_BASE/Kconfig.zephyr"
+source "Kconfig.zephyr"
 
 if NET_LLDP
 

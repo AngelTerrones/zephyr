@@ -11,7 +11,7 @@
  */
 
 #include <errno.h>
-#include <misc/printk.h>
+#include <sys/printk.h>
 #include <net/net_context.h>
 #include <net/net_pkt.h>
 
@@ -38,16 +38,44 @@
 
 #include "connection.h"
 
-extern void net_pkt_init(void);
 extern void net_if_init(void);
 extern void net_if_post_init(void);
 extern void net_if_carrier_down(struct net_if *iface);
+extern void net_if_stats_reset(struct net_if *iface);
+extern void net_if_stats_reset_all(void);
+
+#if defined(CONFIG_NET_NATIVE) || defined(CONFIG_NET_OFFLOAD)
 extern void net_context_init(void);
-enum net_verdict net_ipv4_process_pkt(struct net_pkt *pkt);
-enum net_verdict net_ipv6_process_pkt(struct net_pkt *pkt);
-extern void net_ipv6_init(void);
+extern void net_pkt_init(void);
 extern void net_tc_tx_init(void);
 extern void net_tc_rx_init(void);
+#else
+static inline void net_context_init(void) { }
+static inline void net_pkt_init(void) { }
+static inline void net_tc_tx_init(void) { }
+static inline void net_tc_rx_init(void) { }
+#endif
+
+#if defined(CONFIG_NET_NATIVE)
+enum net_verdict net_ipv4_input(struct net_pkt *pkt);
+enum net_verdict net_ipv6_input(struct net_pkt *pkt, bool is_loopback);
+#else
+static inline enum net_verdict net_ipv4_input(struct net_pkt *pkt)
+{
+	ARG_UNUSED(pkt);
+
+	return NET_CONTINUE;
+}
+
+static inline enum net_verdict net_ipv6_input(struct net_pkt *pkt,
+					      bool is_loopback)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(is_loopback);
+
+	return NET_CONTINUE;
+}
+#endif
 extern void net_tc_submit_to_tx_queue(u8_t tc, struct net_pkt *pkt);
 extern void net_tc_submit_to_rx_queue(u8_t tc, struct net_pkt *pkt);
 extern enum net_verdict net_promisc_mode_input(struct net_pkt *pkt);
@@ -57,6 +85,39 @@ char *net_sprint_addr(sa_family_t af, const void *addr);
 #define net_sprint_ipv4_addr(_addr) net_sprint_addr(AF_INET, _addr)
 
 #define net_sprint_ipv6_addr(_addr) net_sprint_addr(AF_INET6, _addr)
+
+#if defined(CONFIG_NET_CONTEXT_TIMESTAMP)
+int net_context_get_timestamp(struct net_context *context,
+			      struct net_pkt *pkt,
+			      struct net_ptp_time *timestamp);
+#else
+static inline int net_context_get_timestamp(struct net_context *context,
+					    struct net_pkt *pkt,
+					    struct net_ptp_time *timestamp)
+{
+	ARG_UNUSED(context);
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(timestamp);
+
+	return -ENOTSUP;
+}
+#endif
+
+#if defined(CONFIG_COAP)
+/**
+ * @brief CoAP init function declaration. It belongs here because we don't want
+ * to expose it as a public API -- it should only be called once, and only by
+ * net_core.
+ */
+extern void net_coap_init(void);
+#else
+static inline void net_coap_init(void)
+{
+	return;
+}
+#endif
+
+
 
 #if defined(CONFIG_NET_GPTP)
 /**
@@ -74,7 +135,7 @@ void net_gptp_init(void);
 enum net_verdict net_gptp_recv(struct net_if *iface, struct net_pkt *pkt);
 #else
 #define net_gptp_init()
-#define net_gptp_recv(iface, pkt)
+#define net_gptp_recv(iface, pkt) NET_DROP
 #endif /* CONFIG_NET_GPTP */
 
 #if defined(CONFIG_NET_IPV6_FRAGMENT)
@@ -82,72 +143,29 @@ int net_ipv6_send_fragmented_pkt(struct net_if *iface, struct net_pkt *pkt,
 				 u16_t pkt_len);
 #endif
 
-extern const char *net_proto2str(enum net_ip_protocol proto);
+extern const char *net_proto2str(int family, int proto);
 extern char *net_byte_to_hex(char *ptr, u8_t byte, char base, bool pad);
 extern char *net_sprint_ll_addr_buf(const u8_t *ll, u8_t ll_len,
 				    char *buf, int buflen);
 extern u16_t net_calc_chksum(struct net_pkt *pkt, u8_t proto);
-bool net_header_fits(struct net_pkt *pkt, u8_t *hdr, size_t hdr_size);
 
-struct net_icmp_hdr *net_pkt_icmp_data(struct net_pkt *pkt);
-u8_t *net_pkt_icmp_opt_data(struct net_pkt *pkt, size_t opt_len);
-
-/* Check if ICMP header can be directly accessed from memory.
- * If returned value is NULL, then the header was split into
- * multiple fragments and user must use net_pkt_read/write() etc to get/set
- * the ICMP header values.
- * If returned value is not NULL, then the first fragment will
- * hold the ICMP header and returned value will point to start of ICMP header
- * inside net_pkt.
+/**
+ * @brief Deliver the incoming packet through the recv_cb of the net_context
+ *        to the upper layers
+ *
+ * @param conn		Network connection
+ * @param pkt		Network packet
+ * @param ip_hdr	Pointer to IP header, optional
+ * @param proto_hdr	Pointer to transport layer protocol header, optional
+ * @param user_data	User data passed as an argument
+ *
+ * @return NET_OK	if the packet is consumed through the recv_cb
+ *         NET_DROP	if the recv_cb isn't set
  */
-static inline
-struct net_icmp_hdr *net_icmp_header_fits(struct net_pkt *pkt,
-					  struct net_icmp_hdr *hdr)
-{
-	if (net_header_fits(pkt, (u8_t *)hdr, sizeof(*hdr))) {
-		return hdr;
-	}
-
-	return NULL;
-}
-
-/* Header may be split between data fragments. In most cases,
- * net_udp_get_hdr() should be used instead.
- */
-struct net_udp_hdr *net_pkt_udp_data(struct net_pkt *pkt);
-
-static inline
-struct net_udp_hdr *net_udp_header_fits(struct net_pkt *pkt,
-					struct net_udp_hdr *hdr)
-{
-	if (net_header_fits(pkt, (u8_t *)hdr, sizeof(*hdr))) {
-		return hdr;
-	}
-
-	return NULL;
-}
-
-/* Header may be split between data fragments. In most cases,
- * net_tcp_get_hdr() should be used instead.
- */
-struct net_tcp_hdr *net_pkt_tcp_data(struct net_pkt *pkt);
-
-static inline
-struct net_tcp_hdr *net_tcp_header_fits(struct net_pkt *pkt,
-					struct net_tcp_hdr *hdr)
-{
-	if (net_header_fits(pkt, (u8_t *)hdr, sizeof(*hdr))) {
-		return hdr;
-	}
-
-	return NULL;
-}
-
-void net_pkt_set_appdata_values(struct net_pkt *pkt,
-				enum net_ip_protocol proto);
-
 enum net_verdict net_context_packet_received(struct net_conn *conn,
 					     struct net_pkt *pkt,
+					     union net_ip_header *ip_hdr,
+					     union net_proto_header *proto_hdr,
 					     void *user_data);
 
 #if defined(CONFIG_NET_IPV4)
@@ -166,6 +184,13 @@ static inline u16_t net_calc_chksum_icmpv4(struct net_pkt *pkt)
 
 static inline u16_t net_calc_chksum_udp(struct net_pkt *pkt)
 {
+	u16_t chksum = net_calc_chksum(pkt, IPPROTO_UDP);
+
+	return chksum == 0U ? 0xffff : chksum;
+}
+
+static inline u16_t net_calc_verify_chksum_udp(struct net_pkt *pkt)
+{
 	return net_calc_chksum(pkt, IPPROTO_UDP);
 }
 
@@ -174,7 +199,6 @@ static inline u16_t net_calc_chksum_tcp(struct net_pkt *pkt)
 	return net_calc_chksum(pkt, IPPROTO_TCP);
 }
 
-#if NET_LOG_ENABLED > 0
 static inline char *net_sprint_ll_addr(const u8_t *ll, u8_t ll_len)
 {
 	static char buf[sizeof("xx:xx:xx:xx:xx:xx:xx:xx")];
@@ -182,146 +206,59 @@ static inline char *net_sprint_ll_addr(const u8_t *ll, u8_t ll_len)
 	return net_sprint_ll_addr_buf(ll, ll_len, (char *)buf, sizeof(buf));
 }
 
-static inline void _hexdump(const u8_t *packet, size_t length, u8_t reserve)
-{
-	char output[sizeof("xxxxyyyy xxxxyyyy")];
-	int n = 0, k = 0;
-	u8_t byte;
-#if defined(CONFIG_SYS_LOG) && (SYS_LOG_LEVEL > SYS_LOG_LEVEL_OFF)
-	u8_t r = reserve;
-#endif
-
-	while (length--) {
-		if (n % 16 == 0) {
-			printk(" %08X ", n);
-		}
-
-		byte = *packet++;
-
-#if defined(CONFIG_SYS_LOG) && (SYS_LOG_LEVEL > SYS_LOG_LEVEL_OFF)
-		if (reserve) {
-			if (r) {
-				printk(SYS_LOG_COLOR_YELLOW);
-				r--;
-			} else {
-				printk(SYS_LOG_COLOR_OFF);
-			}
-		}
-#endif
-
-		printk("%02X ", byte);
-
-		if (byte < 0x20 || byte > 0x7f) {
-			output[k++] = '.';
-		} else {
-			output[k++] = byte;
-		}
-
-		n++;
-		if (n % 8 == 0) {
-			if (n % 16 == 0) {
-				output[k] = '\0';
-				printk(" [%s]\n", output);
-				k = 0;
-			} else {
-				printk(" ");
-			}
-		}
-	}
-
-	if (n % 16) {
-		int i;
-
-		output[k] = '\0';
-
-		for (i = 0; i < (16 - (n % 16)); i++) {
-			printk("   ");
-		}
-
-		if ((n % 16) < 8) {
-			printk(" "); /* one extra delimiter after 8 chars */
-		}
-
-		printk(" [%s]\n", output);
-	}
-}
-
 static inline void net_hexdump(const char *str,
 			       const u8_t *packet, size_t length)
 {
 	if (!length) {
-		SYS_LOG_DBG("%s zero-length packet", str);
+		LOG_DBG("%s zero-length packet", str);
 		return;
 	}
 
-	printk("%s\n", str);
-
-	_hexdump(packet, length, 0);
+	LOG_HEXDUMP_DBG(packet, length, str);
 }
 
 
-/* Hexdump from all fragments
- * Set full as true to get also the L2 reserve part printed out
- */
-static inline void net_hexdump_frags(const char *str,
-				     struct net_pkt *pkt, bool full)
+/* Hexdump from all fragments */
+static inline void net_pkt_hexdump(struct net_pkt *pkt, const char *str)
 {
-	u8_t reserve = full ? net_pkt_ll_reserve(pkt) : 0;
-	struct net_buf *frag = pkt->frags;
+	struct net_buf *buf = pkt->buffer;
+	char pkt_str[sizeof("0x") + sizeof(intptr_t) * 2];
 
-	printk("%s\n", str);
+	if (str && str[0]) {
+		LOG_DBG("%s", str);
+	}
 
-	while (frag) {
-		_hexdump(full ? frag->data - reserve : frag->data,
-			 frag->len + reserve, reserve);
-		frag = frag->frags;
+	snprintk(pkt_str, sizeof(pkt_str), "%p", pkt);
 
-		if (full && reserve) {
-			reserve -= net_pkt_ll_reserve(pkt);
-		}
+	while (buf) {
+		LOG_HEXDUMP_DBG(buf->data, buf->len, log_strdup(pkt_str));
+		buf = buf->frags;
 	}
 }
 
-/* Print fragment chain */
-static inline void net_print_frags(const char *str, struct net_pkt *pkt)
+static inline void net_pkt_print_buffer_info(struct net_pkt *pkt, const char *str)
 {
-	struct net_buf *frag = pkt->frags;
+	struct net_buf *buf = pkt->buffer;
 
 	if (str) {
 		printk("%s", str);
 	}
 
-	printk("%p[%d]", pkt, pkt->ref);
+	printk("%p[%d]", pkt, atomic_get(&pkt->atomic_ref));
 
-	if (frag) {
+	if (buf) {
 		printk("->");
 	}
 
-	while (frag) {
-		printk("%p[%d/%d]", frag, frag->ref, frag->len);
+	while (buf) {
+		printk("%p[%d/%u (%u)]",
+		       buf, atomic_get(&pkt->atomic_ref), buf->len, buf->size);
 
-		frag = frag->frags;
-		if (frag) {
+		buf = buf->frags;
+		if (buf) {
 			printk("->");
 		}
 	}
 
 	printk("\n");
 }
-
-#else /* NET_LOG_ENABLED */
-
-static inline char *net_sprint_ll_addr(const u8_t *ll, u8_t ll_len)
-{
-	ARG_UNUSED(ll);
-	ARG_UNUSED(ll_len);
-
-	return NULL;
-}
-
-#define net_hexdump(...)
-#define net_hexdump_frags(...)
-
-#define net_print_frags(...)
-
-#endif /* NET_LOG_ENABLED */

@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <misc/util.h>
+#include <sys/util.h>
 
 #define BTP_MTU 1024
 #define BTP_DATA_MAX_SIZE (BTP_MTU - sizeof(struct btp_hdr))
@@ -23,10 +23,6 @@
 #define BTP_STATUS_FAILED	0x01
 #define BTP_STATUS_UNKNOWN_CMD	0x02
 #define BTP_STATUS_NOT_READY	0x03
-
-#define SYS_LOG_LEVEL SYS_LOG_LEVEL_DEBUG
-#define SYS_LOG_DOMAIN "bttester"
-#include <logging/sys_log.h>
 
 struct btp_hdr {
 	u8_t  service;
@@ -232,6 +228,16 @@ struct gap_passkey_confirm_cmd {
 	u8_t match;
 } __packed;
 
+#define GAP_CONN_PARAM_UPDATE		0x16
+struct gap_conn_param_update_cmd {
+	u8_t address_type;
+	u8_t address[6];
+	u16_t interval_min;
+	u16_t interval_max;
+	u16_t latency;
+	u16_t timeout;
+} __packed;
+
 /* events */
 #define GAP_EV_NEW_SETTINGS		0x80
 struct gap_new_settings_ev {
@@ -256,6 +262,9 @@ struct gap_device_found_ev {
 struct gap_device_connected_ev {
 	u8_t address_type;
 	u8_t address[6];
+	u16_t interval;
+	u16_t latency;
+	u16_t timeout;
 } __packed;
 
 #define GAP_EV_DEVICE_DISCONNECTED	0x83
@@ -290,6 +299,15 @@ struct gap_identity_resolved_ev {
 	u8_t address[6];
 	u8_t identity_address_type;
 	u8_t identity_address[6];
+} __packed;
+
+#define GAP_EV_CONN_PARAM_UPDATE	0x88
+struct gap_conn_param_update_ev {
+	u8_t address_type;
+	u8_t address[6];
+	u16_t interval;
+	u16_t latency;
+	u16_t timeout;
 } __packed;
 
 /* GATT Service */
@@ -391,6 +409,12 @@ struct gatt_descriptor {
 
 #define GATT_EXCHANGE_MTU		0x0a
 
+#define GATT_DISC_ALL_PRIM		0x0b
+struct gatt_disc_all_prim_cmd {
+	u8_t address_type;
+	u8_t address[6];
+} __packed;
+
 #define GATT_DISC_PRIM_UUID		0x0c
 struct gatt_disc_prim_uuid_cmd {
 	u8_t address_type;
@@ -398,7 +422,7 @@ struct gatt_disc_prim_uuid_cmd {
 	u8_t uuid_length;
 	u8_t uuid[0];
 } __packed;
-struct gatt_disc_prim_uuid_rp {
+struct gatt_disc_prim_rp {
 	u8_t services_count;
 	struct gatt_service services[0];
 } __packed;
@@ -459,6 +483,16 @@ struct gatt_read_rp {
 	u8_t att_response;
 	u16_t data_length;
 	u8_t data[0];
+} __packed;
+
+#define GATT_READ_UUID			0x12
+struct gatt_read_uuid_cmd {
+	u8_t address_type;
+	u8_t address[6];
+	u16_t start_handle;
+	u16_t end_handle;
+	u8_t uuid_length;
+	u8_t uuid[0];
 } __packed;
 
 #define GATT_READ_LONG			0x13
@@ -543,6 +577,8 @@ struct gatt_attr {
 
 #define GATT_GET_ATTRIBUTE_VALUE	0x1d
 struct gatt_get_attribute_value_cmd {
+	u8_t address_type;
+	u8_t address[6];
 	u16_t handle;
 } __packed;
 struct gatt_get_attribute_value_rp {
@@ -571,14 +607,14 @@ struct gatt_attr_value_changed_ev {
 
 static inline void tester_set_bit(u8_t *addr, unsigned int bit)
 {
-	u8_t *p = addr + (bit / 8);
+	u8_t *p = addr + (bit / 8U);
 
 	*p |= BIT(bit % 8);
 }
 
 static inline u8_t tester_test_bit(const u8_t *addr, unsigned int bit)
 {
-	const u8_t *p = addr + (bit / 8);
+	const u8_t *p = addr + (bit / 8U);
 
 	return *p & BIT(bit % 8);
 }

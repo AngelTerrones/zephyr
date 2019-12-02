@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
 #include "armv6-m.dtsi"
 #include <dt-bindings/clock/kinetis_sim.h>
 #include <dt-bindings/gpio/gpio.h>
@@ -16,7 +18,6 @@
 	};
 
 	sram0: memory@20000000 {
-		device_type = "memory";
 		compatible = "mmio-sram";
 		reg = <0x20000000 0x4000>;
 	};
@@ -25,8 +26,6 @@
 		mcg: clock-controller@40064000 {
 			compatible = "nxp,kw41z-mcg";
 			reg = <0x40064000 0x13>;
-			system-clock-frequency = <48000000>;
-			clock-controller;
 		};
 
 		clock-controller@40065000 {
@@ -46,7 +45,6 @@
 			reg = <0x40047000 0x1060>;
 			label = "SIM";
 
-			clock-controller;
 			#clock-cells = <3>;
 		};
 
@@ -99,9 +97,6 @@
 			clocks = <&sim KINETIS_SIM_CORESYS_CLK 0x1038 20>;
 			label = "UART_0";
 
-			pinctrl-0 = <&lpuart0_default>;
-			pinctrl-names = "default";
-
 			status = "disabled";
 		};
 
@@ -109,13 +104,6 @@
 			compatible = "nxp,kinetis-pinmux";
 			reg = <0x40049000 0xa4>;
 			clocks = <&sim KINETIS_SIM_BUS_CLK 0x1038 9>;
-
-			spi1_default: spi1_default {
-				mosi-miso-sck-pcs0 {
-					pins = <16>, <17>, <18>, <19>;
-					function = <2>;
-				};
-			};
 		};
 
 		pinmux_b: pinmux@4004a000 {
@@ -128,34 +116,6 @@
 			compatible = "nxp,kinetis-pinmux";
 			reg = <0x4004b000 0xa4>;
 			clocks = <&sim KINETIS_SIM_BUS_CLK 0x1038 11>;
-
-			lpuart0_default: lpuart0_default {
-				rx-tx {
-					pins = <6>, <7>;
-					function = <4>;
-				};
-			};
-
-			lpuart0_alt1: lpuart0_alt1 {
-				rx-tx {
-					pins = <17>, <18>;
-					function = <4>;
-				};
-			};
-
-			lpuart0_alt2: lpuart0_alt2 {
-				rx-tx-cts-rts {
-					pins = <2>, <3>, <0>, <1>;
-					function = <4>;
-				};
-			};
-
-			spi0_default: spi0_default {
-				mosi-miso-clk-pcs0 {
-					pins = <18>, <17>, <16>, <19>;
-					function = <2>;
-				};
-			};
 		};
 
 		gpioa: gpio@400ff000 {
@@ -170,7 +130,6 @@
 		gpiob: gpio@400ff040 {
 			compatible = "nxp,kinetis-gpio";
 			reg = <0x400ff040 0x40>;
-			interrupts = <31 2>;
 			label = "GPIO_2";
 			gpio-controller;
 			#gpio-cells = <2>;
@@ -192,9 +151,6 @@
 			label = "SPI_0";
 			clocks = <&sim KINETIS_SIM_BUS_CLK 0x103C 12>;
 
-			cs = <&gpiob 18 0>, <&gpiob 17 0>;
-			pinctrl-0 = <&spi0_default>;
-			pinctrl-names = "default";
 			#address-cells = <1>;
 			#size-cells = <0>;
 		};
@@ -215,7 +171,6 @@
 			reg = <0x40038000 0x88>;
 			prescaler = <2>;
 			period = <1000>;
-			clock-source = <0>;
 			/* channel information needed - fixme */
 		};
 
@@ -224,7 +179,6 @@
 			reg = <0x40039000 0x88>;
 			prescaler = <2>;
 			period = <1000>;
-			clock-source = <0>;
 			/* channel information needed - fixme */
 		};
 
@@ -233,7 +187,6 @@
 			reg = <0x4003a000 0x88>;
 			prescaler = <2>;
 			period = <1000>;
-			clock-source = <0>;
 			/* channel information needed - fixme */
 		};
 
@@ -243,6 +196,15 @@
 			interrupts = <15 0>;
 			label = "ADC_0";
 			status = "disabled";
+			#io-channel-cells = <1>;
+		};
+
+		trng: random@40029000 {
+			compatible = "nxp,kinetis-trng";
+			reg = <0x40029000 0x1000>;
+			status = "okay";
+			interrupts = <13 0>;
+			label = "TRNG";
 		};
 	};
 };

@@ -7,8 +7,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef __BT_MESH_MAIN_H
-#define __BT_MESH_MAIN_H
+#ifndef ZEPHYR_INCLUDE_BLUETOOTH_MESH_MAIN_H_
+#define ZEPHYR_INCLUDE_BLUETOOTH_MESH_MAIN_H_
 
 /**
  * @brief Bluetooth Mesh Provisioning
@@ -16,6 +16,10 @@
  * @ingroup bt_mesh
  * @{
  */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef enum {
 	BT_MESH_NO_OUTPUT       = 0,
@@ -124,6 +128,28 @@ struct bt_mesh_prov {
 	 */
 	int         (*input)(bt_mesh_input_action_t act, u8_t size);
 
+	/** @brief The other device finished their OOB input.
+	 *
+	 * This callback notifies the application that it should stop
+	 * displaying its output OOB value, as the other party finished their
+	 * OOB input.
+	 */
+	void 	    (*input_complete)(void);
+
+	/** @brief Unprovisioned beacon has been received.
+	 *
+	 * This callback notifies the application that an unprovisioned
+	 * beacon has been received.
+	 *
+	 * @param uuid UUID
+	 * @param oob_info OOB Information
+	 * @param uri_hash Pointer to URI Hash value. NULL if no hash was
+	 *                 present in the beacon.
+	 */
+	void        (*unprovisioned_beacon)(u8_t uuid[16],
+					    bt_mesh_prov_oob_info_t oob_info,
+					    u32_t *uri_hash);
+
 	/** @brief Provisioning link has been opened.
 	 *
 	 *  This callback notifies the application that a provisioning
@@ -152,6 +178,18 @@ struct bt_mesh_prov {
 	 *  @param addr Primary element address.
 	 */
 	void        (*complete)(u16_t net_idx, u16_t addr);
+
+	/** @brief A new node has been added to the provisioning database.
+	 *
+	 *  This callback notifies the application that provisioning has
+	 *  been successfully completed, and that a node has been assigned
+	 *  the specified NetKeyIndex and primary element address.
+	 *
+	 *  @param net_idx NetKeyIndex given during provisioning.
+	 *  @param addr Primary element address.
+	 *  @param num_elem Number of elements that this node has.
+	 */
+	void        (*node_added)(u16_t net_idx, u16_t addr, u8_t num_elem);
 
 	/** @brief Node has been reset.
 	 *
@@ -205,6 +243,49 @@ int bt_mesh_prov_enable(bt_mesh_prov_bearer_t bearers);
  *  @return Zero on success or (negative) error code otherwise.
  */
 int bt_mesh_prov_disable(bt_mesh_prov_bearer_t bearers);
+
+/** @brief Provision the local Mesh Node.
+ *
+ *  This API should normally not be used directly by the application. The
+ *  only exception is for testing purposes where manual provisioning is
+ *  desired without an actual external provisioner.
+ *
+ *  @param net_key  Network Key
+ *  @param net_idx  Network Key Index
+ *  @param flags    Provisioning Flags
+ *  @param iv_index IV Index
+ *  @param addr     Primary element address
+ *  @param dev_key  Device Key
+ *
+ *  @return Zero on success or (negative) error code otherwise.
+ */
+int bt_mesh_provision(const u8_t net_key[16], u16_t net_idx,
+		      u8_t flags, u32_t iv_index, u16_t addr,
+		      const u8_t dev_key[16]);
+
+/** @brief Provision a Mesh Node using PB-ADV
+ *
+ * @param uuid    UUID
+ * @param net_idx Network Key Index
+ * @param addr    Address to assign to remote device. If addr is 0, the lowest
+ *                available address will be chosen.
+ * @param attention_duration The attention duration to be send to remote device
+ *
+ * @return Zero on success or (negative) error code otherwise.
+ */
+int bt_mesh_provision_adv(const u8_t uuid[16], u16_t net_idx, u16_t addr,
+			  u8_t attention_duration);
+
+/** @brief Check if the local node has been provisioned.
+ *
+ *  This API can be used to check if the local node has been provisioned
+ *  or not. It can e.g. be helpful to determine if there was a stored
+ *  network in flash, i.e. if the network was restored after calling
+ *  settings_load().
+ *
+ *  @return True if the node is provisioned. False otherwise.
+ */
+bool bt_mesh_is_provisioned(void);
 
 /**
  * @}
@@ -275,35 +356,26 @@ int bt_mesh_init(const struct bt_mesh_prov *prov,
  */
 void bt_mesh_reset(void);
 
-/** @brief Provision the local Mesh Node.
+/** @brief Suspend the Mesh network temporarily.
  *
- *  This API should normally not be used directly by the application. The
- *  only exception is for testing purposes where manual provisioning is
- *  desired without an actual external provisioner.
+ *  This API can be used for power saving purposes, but the user should be
+ *  aware that leaving the local node suspended for a long period of time
+ *  may cause it to become permanently disconnected from the Mesh network.
+ *  If at all possible, the Friendship feature should be used instead, to
+ *  make the node into a Low Power Node.
  *
- *  @param net_key  Network Key
- *  @param net_idx  Network Key Index
- *  @param flags    Provisioning Flags
- *  @param iv_index IV Index
- *  @param addr     Primary element address
- *  @param dev_key  Device Key
- *
- *  @return Zero on success or (negative) error code otherwise.
+ *  @return 0 on success, or (negative) error code on failure.
  */
-int bt_mesh_provision(const u8_t net_key[16], u16_t net_idx,
-		      u8_t flags, u32_t iv_index, u16_t addr,
-		      const u8_t dev_key[16]);
+int bt_mesh_suspend(void);
 
-/** @brief Check if the local node has been provisioned.
+/** @brief Resume a suspended Mesh network.
  *
- *  This API can be used to check if the local node has been provisioned
- *  or not. It can e.g. be helpful to determine if there was a stored
- *  network in flash, i.e. if the network was restored after calling
- *  settings_load().
+ *  This API resumes the local node, after it has been suspended using the
+ *  bt_mesh_suspend() API.
  *
- *  @return True if the node is provisioned. False otherwise.
+ *  @return 0 on success, or (negative) error code on failure.
  */
-bool bt_mesh_is_provisioned(void);
+int bt_mesh_resume(void);
 
 /** @brief Toggle the IV Update test mode
  *
@@ -356,8 +428,12 @@ int bt_mesh_lpn_poll(void);
  */
 void bt_mesh_lpn_set_cb(void (*cb)(u16_t friend_addr, bool established));
 
+#ifdef __cplusplus
+}
+#endif
+
 /**
  * @}
  */
 
-#endif /* __BT_MESH_MAIN_H */
+#endif /* ZEPHYR_INCLUDE_BLUETOOTH_MESH_MAIN_H_ */

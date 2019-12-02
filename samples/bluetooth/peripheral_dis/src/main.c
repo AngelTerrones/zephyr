@@ -10,8 +10,8 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <misc/printk.h>
-#include <misc/byteorder.h>
+#include <sys/printk.h>
+#include <sys/byteorder.h>
 #include <zephyr.h>
 
 #include <bluetooth/bluetooth.h>
@@ -19,8 +19,7 @@
 #include <bluetooth/conn.h>
 #include <bluetooth/uuid.h>
 #include <bluetooth/gatt.h>
-
-#include <gatt/dis.h>
+#include <settings/settings.h>
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -30,7 +29,7 @@ static const struct bt_data ad[] = {
 static void connected(struct bt_conn *conn, u8_t err)
 {
 	if (err) {
-		printk("Connection failed (err %u)\n", err);
+		printk("Connection failed (err 0x%02x)\n", err);
 	} else {
 		printk("Connected\n");
 	}
@@ -38,13 +37,46 @@ static void connected(struct bt_conn *conn, u8_t err)
 
 static void disconnected(struct bt_conn *conn, u8_t reason)
 {
-	printk("Disconnected (reason %u)\n", reason);
+	printk("Disconnected (reason 0x%02x)\n", reason);
 }
 
 static struct bt_conn_cb conn_callbacks = {
 	.connected = connected,
 	.disconnected = disconnected,
 };
+
+static int settings_runtime_load(void)
+{
+#if defined(CONFIG_BT_GATT_DIS_SETTINGS)
+	settings_runtime_set("bt/dis/model",
+			     "Zephyr Model",
+			     sizeof("Zephyr Model"));
+	settings_runtime_set("bt/dis/manuf",
+			     "Zephyr Manufacturer",
+			     sizeof("Zephyr Manufacturer"));
+#if defined(CONFIG_BT_GATT_DIS_SERIAL_NUMBER)
+	settings_runtime_set("bt/dis/serial",
+			     CONFIG_BT_GATT_DIS_SERIAL_NUMBER_STR,
+			     sizeof(CONFIG_BT_GATT_DIS_SERIAL_NUMBER_STR));
+#endif
+#if defined(CONFIG_BT_GATT_DIS_SW_REV)
+	settings_runtime_set("bt/dis/sw",
+			     CONFIG_BT_GATT_DIS_SW_REV_STR,
+			     sizeof(CONFIG_BT_GATT_DIS_SW_REV_STR));
+#endif
+#if defined(CONFIG_BT_GATT_DIS_FW_REV)
+	settings_runtime_set("bt/dis/fw",
+			     CONFIG_BT_GATT_DIS_FW_REV_STR,
+			     sizeof(CONFIG_BT_GATT_DIS_FW_REV_STR));
+#endif
+#if defined(CONFIG_BT_GATT_DIS_HW_REV)
+	settings_runtime_set("bt/dis/hw",
+			     CONFIG_BT_GATT_DIS_HW_REV_STR,
+			     sizeof(CONFIG_BT_GATT_DIS_HW_REV_STR));
+#endif
+#endif
+	return 0;
+}
 
 void main(void)
 {
@@ -56,9 +88,9 @@ void main(void)
 		return;
 	}
 
-	printk("Bluetooth initialized\n");
+	settings_runtime_load();
 
-	dis_init(CONFIG_SOC, "Manufacturer");
+	printk("Bluetooth initialized\n");
 
 	bt_conn_cb_register(&conn_callbacks);
 

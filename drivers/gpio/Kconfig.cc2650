@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-#
+
 # GPIO configuration options for the CC2650 SoC (Texas Instruments).
 
 menuconfig GPIO_CC2650
 	bool "TI CC2650 GPIO driver"
-	depends on GPIO && SOC_SERIES_CC2650
+	depends on SOC_SERIES_CC2650
 	help
 	  Enable the GPIO driver on boards equipped with TI CC2650.
 

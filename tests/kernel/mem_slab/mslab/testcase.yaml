@@ -1,4 +1,4 @@
 tests:
-  kernel.memory_slabs:
-    tags: bat_commit core
+  kernel.memory_slabs.api.test:
+    tags: kernel
     min_ram: 16

@@ -10,7 +10,7 @@
 
 extern void test_obj_tracing(void);
 
-#define STSIZE 1024
+#define STSIZE (1024 + CONFIG_TEST_EXTRA_STACKSIZE)
 #define N_PHILOSOPHERS  5
 
 #define TOTAL_TEST_NUMBER 2
@@ -95,7 +95,7 @@ static void object_monitor(void)
 
 	void *obj_list   = NULL;
 
-	k_sem_take(&f3, 0);
+	k_sem_take(&f3, K_NO_WAIT);
 	/* ztest use one semaphore so use one count less than expected to pass
 	 * test
 	 */

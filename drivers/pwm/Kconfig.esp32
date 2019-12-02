@@ -1,14 +1,10 @@
-# Kconfig.esp32 - ESP32 PWM LED configuration options
-#
-#
+# ESP32 PWM LED configuration options
+
 # Copyright (c) 2017 Vitor Massaru Iha <vitor@massaru.org>
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig PWM_LED_ESP32
 	bool "ESP32 PWM LED driver"
-	depends on PWM
 	help
 	  This option enables the PWM LED driver for ESP32 family of
 	  processors. Say y if you wish to use PWM LED port on ESP32.
@@ -17,7 +13,6 @@ if PWM_LED_ESP32
 
 config PWM_LED_ESP32_DEV_NAME_0
 	string "ESP32 PWM LED Name"
-	depends on PWM_LED_ESP32
 	default "PWM_LED"
 	help
 	  Specify the device name for the PWM driver.

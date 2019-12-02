@@ -11,14 +11,10 @@
  * Exception/interrupt context helpers.
  */
 
-#ifndef _ARM_CORTEXM_ISR__H_
-#define _ARM_CORTEXM_ISR__H_
+#ifndef ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_EXC_H_
+#define ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_EXC_H_
 
 #include <arch/cpu.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 #ifdef _ASMLANGUAGE
 
@@ -27,8 +23,12 @@ extern "C" {
 #else
 
 #include <arch/arm/cortex_m/cmsis.h>
-#include <arch/arm/cortex_m/exc.h>
+#include <arch/arm/exc.h>
 #include <irq_offload.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifdef CONFIG_IRQ_OFFLOAD
 extern volatile irq_offload_routine_t offload_routine;
@@ -38,49 +38,39 @@ extern volatile irq_offload_routine_t offload_routine;
  * to the Vector Key field, otherwise the writes are ignored.
  */
 #define AIRCR_VECT_KEY_PERMIT_WRITE 0x05FAUL
-/**
- *
- * @brief Find out if running in an ISR context
- *
- * The current executing vector is found in the IPSR register. We consider the
- * IRQs (exception 16 and up), and the PendSV and SYSTICK exceptions to be
- * interrupts. Taking a fault within an exception is also considered in
- * interrupt context.
- *
- * @return 1 if in ISR, 0 if not.
- */
-static ALWAYS_INLINE int _IsInIsr(void)
-{
-	u32_t vector = __get_IPSR();
 
-	/* IRQs + PendSV (14) + SYSTICK (15) are interrupts. */
-	return (vector > 13)
-#ifdef CONFIG_IRQ_OFFLOAD
-		/* Only non-NULL if currently running an offloaded function */
-		|| offload_routine != NULL
-#endif
-#if defined(CONFIG_ARMV6_M_ARMV8_M_BASELINE)
-		/* On ARMv6-M there is no nested execution bit, so we check
-		 * exception 3, hard fault, to a detect a nested exception.
-		 */
-		|| (vector == 3)
-#elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
-		/* If not in thread mode, and if RETTOBASE bit in ICSR is 0,
-		 * then there are preempted active exceptions to execute.
-		 */
-#ifndef CONFIG_BOARD_QEMU_CORTEX_M3
-		/* The polarity of RETTOBASE is incorrectly flipped in
-		 * all but the very latest master tip of QEMU's NVIC driver,
-		 * see commit "armv7m: Rewrite NVIC to not use any GIC code".
-		 * Until QEMU 2.9 is released, and the SDK is updated to
-		 * include it, skip this check in QEMU.
-		 */
-		|| (vector && !(SCB->ICSR & SCB_ICSR_RETTOBASE_Msk))
-#endif /* CONFIG_BOARD_QEMU_CORTEX_M3 */
-#else
-#error Unknown ARM architecture
-#endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
-		;
+/*
+ * The current executing vector is found in the IPSR register. All
+ * IRQs and system exceptions are considered as interrupt context.
+ */
+static ALWAYS_INLINE bool arch_is_in_isr(void)
+{
+	return (__get_IPSR()) ? (true) : (false);
+}
+
+/**
+ * @brief Find out if we were in ISR context
+ *        before the current exception occurred.
+ *
+ * A function that determines, based on inspecting the current
+ * ESF, whether the processor was in handler mode before entering
+ * the current exception state (i.e. nested exception) or not.
+ *
+ * Notes:
+ * - The function shall only be called from ISR context.
+ * - We do not use ARM processor state flags to determine
+ *   whether we are in a nested exception; we rely on the
+ *   RETPSR value stacked on the ESF. Hence, the function
+ *   assumes that the ESF stack frame has a valid RETPSR
+ *   value.
+ *
+ * @param esf the exception stack frame (cannot be NULL)
+ * @return true if execution state was in handler mode, before
+ *              the current exception occurred, otherwise false.
+ */
+static ALWAYS_INLINE bool arch_is_in_nested_exception(const z_arch_esf_t *esf)
+{
+	return (esf->basic.xpsr & IPSR_ISR_Msk) ? (true) : (false);
 }
 
 /**
@@ -93,7 +83,7 @@ static ALWAYS_INLINE int _IsInIsr(void)
  *
  * @return N/A
  */
-static ALWAYS_INLINE void _ExcSetup(void)
+static ALWAYS_INLINE void z_arm_exc_setup(void)
 {
 	NVIC_SetPriority(PendSV_IRQn, 0xff);
 
@@ -120,7 +110,8 @@ static ALWAYS_INLINE void _ExcSetup(void)
 #endif /* CONFIG_ARM_SECURE_FIRMWARE */
 #endif /* CONFIG_CPU_CORTEX_M_HAS_PROGRAMMABLE_FAULT_PRIOS */
 
-#if defined(CONFIG_ARM_SECURE_FIRMWARE)
+#if defined(CONFIG_ARM_SECURE_FIRMWARE) && \
+	!defined(CONFIG_ARM_SECURE_BUSFAULT_HARDFAULT_NMI)
 	/* Set NMI, Hard, and Bus Faults as Non-Secure.
 	 * NMI and Bus Faults targeting the Secure state will
 	 * escalate to a SecureFault or SecureHardFault.
@@ -134,7 +125,7 @@ static ALWAYS_INLINE void _ExcSetup(void)
 	 * in a PE with the Main Extension instead generate a
 	 * SecureHardFault in a PE without the Main Extension.
 	 */
-#endif /* CONFIG_ARM_SECURE_FIRMWARE */
+#endif /* ARM_SECURE_FIRMWARE && !ARM_SECURE_BUSFAULT_HARDFAULT_NMI */
 }
 
 /**
@@ -144,7 +135,7 @@ static ALWAYS_INLINE void _ExcSetup(void)
  *
  * @return N/A
  */
-static ALWAYS_INLINE void _ClearFaults(void)
+static ALWAYS_INLINE void z_arm_clear_faults(void)
 {
 #if defined(CONFIG_ARMV6_M_ARMV8_M_BASELINE)
 #elif defined(CONFIG_ARMV7_M_ARMV8_M_MAINLINE)
@@ -160,11 +151,10 @@ static ALWAYS_INLINE void _ClearFaults(void)
 #endif /* CONFIG_ARMV6_M_ARMV8_M_BASELINE */
 }
 
-#endif /* _ASMLANGUAGE */
-
 #ifdef __cplusplus
 }
 #endif
 
+#endif /* _ASMLANGUAGE */
 
-#endif /* _ARM_CORTEXM_ISR__H_ */
+#endif /* ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_EXC_H_ */

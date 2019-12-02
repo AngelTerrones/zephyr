@@ -7,11 +7,15 @@
 #include <errno.h>
 
 #include <kernel.h>
-#include <i2c.h>
-#include <sensor.h>
-#include <gpio.h>
-#include <misc/util.h>
+#include <drivers/i2c.h>
+#include <drivers/sensor.h>
+#include <drivers/gpio.h>
+#include <sys/util.h>
+
 #include "sx9500.h"
+
+#include <logging/log.h>
+LOG_MODULE_DECLARE(SX9500, CONFIG_SENSOR_LOG_LEVEL);
 
 #ifdef CONFIG_SX9500_TRIGGER_OWN_THREAD
 static K_THREAD_STACK_DEFINE(sx9500_thread_stack, CONFIG_SX9500_THREAD_STACK_SIZE);
@@ -82,7 +86,7 @@ static void sx9500_thread_main(int arg1, int unused)
 
 		if (i2c_reg_read_byte(data->i2c_master, data->i2c_slave_addr,
 					SX9500_REG_IRQ_SRC, &reg_val) < 0) {
-			SYS_LOG_DBG("sx9500: error reading IRQ source register");
+			LOG_DBG("sx9500: error reading IRQ source register");
 			continue;
 		}
 
@@ -117,7 +121,7 @@ static void sx9500_gpio_thread_cb(void *arg)
 
 	if (i2c_reg_read_byte(data->i2c_master, data->i2c_slave_addr,
 			      SX9500_REG_IRQ_SRC, &reg_val) < 0) {
-		SYS_LOG_DBG("sx9500: error reading IRQ source register");
+		LOG_DBG("sx9500: error reading IRQ source register");
 		return;
 	}
 
@@ -153,29 +157,29 @@ int sx9500_setup_interrupt(struct device *dev)
 	data->dev = dev;
 #endif
 
-	gpio = device_get_binding(CONFIG_SX9500_GPIO_CONTROLLER);
+	gpio = device_get_binding(DT_INST_0_SEMTECH_SX9500_INT_GPIOS_CONTROLLER);
 	if (!gpio) {
-		SYS_LOG_DBG("sx9500: gpio controller %s not found",
-			    CONFIG_SX9500_GPIO_CONTROLLER);
+		LOG_DBG("sx9500: gpio controller %s not found",
+			    DT_INST_0_SEMTECH_SX9500_INT_GPIOS_CONTROLLER);
 		return -EINVAL;
 	}
 
-	gpio_pin_configure(gpio, CONFIG_SX9500_GPIO_PIN,
+	gpio_pin_configure(gpio, DT_INST_0_SEMTECH_SX9500_INT_GPIOS_PIN,
 			   GPIO_DIR_IN | GPIO_INT | GPIO_INT_EDGE |
 			   GPIO_INT_ACTIVE_LOW | GPIO_INT_DEBOUNCE);
 
 	gpio_init_callback(&data->gpio_cb,
 			   sx9500_gpio_cb,
-			   BIT(CONFIG_SX9500_GPIO_PIN));
+			   BIT(DT_INST_0_SEMTECH_SX9500_INT_GPIOS_PIN));
 
 	gpio_add_callback(gpio, &data->gpio_cb);
-	gpio_pin_enable_callback(gpio, CONFIG_SX9500_GPIO_PIN);
+	gpio_pin_enable_callback(gpio, DT_INST_0_SEMTECH_SX9500_INT_GPIOS_PIN);
 
 #ifdef CONFIG_SX9500_TRIGGER_OWN_THREAD
 	k_thread_create(&sx9500_thread, sx9500_thread_stack,
 			CONFIG_SX9500_THREAD_STACK_SIZE,
-			sx9500_thread_main, POINTER_TO_INT(dev), 0, NULL,
-			K_PRIO_COOP(CONFIG_SX9500_THREAD_PRIORITY), 0, 0);
+			(k_thread_entry_t)sx9500_thread_main, dev, 0, NULL,
+			K_PRIO_COOP(CONFIG_SX9500_THREAD_PRIORITY), 0, K_NO_WAIT);
 #endif
 
 	return 0;

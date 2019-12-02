@@ -18,16 +18,17 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef _HTTP_PARSER_URL_H_
-#define _HTTP_PARSER_URL_H_
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifndef ZEPHYR_INCLUDE_NET_HTTP_PARSER_URL_H_
+#define ZEPHYR_INCLUDE_NET_HTTP_PARSER_URL_H_
 
 #include <sys/types.h>
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <net/http_parser_state.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 enum http_parser_url_fields {
 	  UF_SCHEMA           = 0

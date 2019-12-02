@@ -11,7 +11,7 @@
 #include "native_rtc.h"
 #include "hw_models_top.h"
 #include "timer_model.h"
-#include "posix_trace.h"
+#include <arch/posix/posix_trace.h>
 
 /**
  * Return the (simulation) time in microseconds
@@ -28,7 +28,7 @@ u64_t native_rtc_gettime_us(int clock_type)
 		u64_t sec;
 
 		hwtimer_get_pseudohost_rtc_time(&nsec, &sec);
-		return sec * 1000000UL + nsec / 1000;
+		return sec * 1000000UL + nsec / 1000U;
 	}
 
 	posix_print_error_and_exit("Unknown clock source %i\n",
@@ -45,7 +45,7 @@ void native_rtc_gettime(int clock_type, u32_t *nsec, u64_t *sec)
 {
 	if (clock_type == RTC_CLOCK_BOOT || clock_type == RTC_CLOCK_REALTIME) {
 		u64_t us = native_rtc_gettime_us(clock_type);
-		*nsec = (us % 1000000UL) * 1000;
+		*nsec = (us % 1000000UL) * 1000U;
 		*sec  = us / 1000000UL;
 	} else { /* RTC_CLOCK_PSEUDOHOSTREALTIME */
 		hwtimer_get_pseudohost_rtc_time(nsec, sec);

@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _SENSOR_TMP007
-#define _SENSOR_TMP007
+#ifndef ZEPHYR_DRIVERS_SENSOR_TMP007_TMP007_H_
+#define ZEPHYR_DRIVERS_SENSOR_TMP007_TMP007_H_
 
 #include <device.h>
-#include <gpio.h>
-#include <misc/util.h>
+#include <drivers/gpio.h>
+#include <sys/util.h>
 
-#define TMP007_I2C_ADDRESS		CONFIG_TMP007_I2C_ADDR
+#define TMP007_I2C_ADDRESS		DT_INST_0_TI_TMP007_BASE_ADDRESS
 
 #define TMP007_REG_CONFIG		0x02
 #define TMP007_ALERT_EN_BIT		BIT(8)
@@ -79,7 +79,4 @@ int tmp007_trigger_set(struct device *dev,
 int tmp007_init_interrupt(struct device *dev);
 #endif
 
-#define SYS_LOG_DOMAIN "TMP007"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_SENSOR_LEVEL
-#include <logging/sys_log.h>
 #endif /* _SENSOR_TMP007_ */

@@ -10,16 +10,14 @@
 
 #include "vl53l0x_platform.h"
 
-#include <sensor.h>
+#include <drivers/sensor.h>
 #include <kernel.h>
 #include <device.h>
 #include <init.h>
-#include <i2c.h>
+#include <drivers/i2c.h>
+#include <logging/log.h>
 
-#define SYS_LOG_DOMAIN "VL53L0X"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_SENSOR_LEVEL
-#include <logging/sys_log.h>
-
+LOG_MODULE_DECLARE(VL53L0X, CONFIG_SENSOR_LOG_LEVEL);
 
 VL53L0X_Error VL53L0X_WriteMulti(VL53L0X_DEV Dev, uint8_t index, uint8_t *pdata,
 				 uint32_t count)
@@ -36,7 +34,7 @@ VL53L0X_Error VL53L0X_WriteMulti(VL53L0X_DEV Dev, uint8_t index, uint8_t *pdata,
 
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("Failed to write");
+		LOG_ERR("Failed to write");
 	}
 
 	return Status;
@@ -51,7 +49,7 @@ VL53L0X_Error VL53L0X_ReadMulti(VL53L0X_DEV Dev, uint8_t index, uint8_t *pdata,
 	status_int = i2c_burst_read(Dev->i2c, Dev->I2cDevAddr, index, pdata,
 				    count);
 	if (status_int < 0) {
-		SYS_LOG_ERR("Failed to read");
+		LOG_ERR("Failed to read");
 		return -EIO;
 	}
 
@@ -68,7 +66,7 @@ VL53L0X_Error VL53L0X_WrByte(VL53L0X_DEV Dev, uint8_t index, uint8_t data)
 
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("i2c_reg_write_byte failed (%d)", Status);
+		LOG_ERR("i2c_reg_write_byte failed (%d)", Status);
 	}
 
 	return Status;
@@ -87,7 +85,7 @@ VL53L0X_Error VL53L0X_WrWord(VL53L0X_DEV Dev, uint8_t index, uint16_t data)
 	status_int = i2c_write(Dev->i2c, I2CBuffer, 3, Dev->I2cDevAddr);
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("i2c_write failed (%d)", Status);
+		LOG_ERR("i2c_write failed (%d)", Status);
 	}
 
 	return Status;
@@ -108,7 +106,7 @@ VL53L0X_Error VL53L0X_WrDWord(VL53L0X_DEV Dev, uint8_t index, uint32_t data)
 	status_int = i2c_write(Dev->i2c, I2CBuffer, 5, Dev->I2cDevAddr);
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("i2c_write failed (%d)", Status);
+		LOG_ERR("i2c_write failed (%d)", Status);
 	}
 
 	return Status;
@@ -127,7 +125,7 @@ VL53L0X_Error VL53L0X_UpdateByte(VL53L0X_DEV Dev, uint8_t index,
 	status_int = VL53L0X_RdByte(Dev, index, &data);
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("VL53L0X_RdByte failed (%d)", Status);
+		LOG_ERR("VL53L0X_RdByte failed (%d)", Status);
 	}
 
 	if (Status == VL53L0X_ERROR_NONE) {
@@ -135,7 +133,7 @@ VL53L0X_Error VL53L0X_UpdateByte(VL53L0X_DEV Dev, uint8_t index,
 		status_int = VL53L0X_WrByte(Dev, index, data);
 		if (status_int != 0) {
 			Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-			SYS_LOG_DBG("VL53L0X_WrByte failed.(%d)", Status);
+			LOG_DBG("VL53L0X_WrByte failed.(%d)", Status);
 		}
 	}
 
@@ -150,7 +148,7 @@ VL53L0X_Error VL53L0X_RdByte(VL53L0X_DEV Dev, uint8_t index, uint8_t *data)
 	status_int = i2c_reg_read_byte(Dev->i2c, Dev->I2cDevAddr, index, data);
 	if (status_int < 0) {
 		Status = VL53L0X_ERROR_CONTROL_INTERFACE;
-		SYS_LOG_ERR("i2c_reg_read_byte failed (%d)", Status);
+		LOG_ERR("i2c_reg_read_byte failed (%d)", Status);
 	}
 
 	return Status;
@@ -164,7 +162,7 @@ VL53L0X_Error VL53L0X_RdWord(VL53L0X_DEV Dev, uint8_t index, uint16_t *data)
 
 	status_int = i2c_burst_read(Dev->i2c, Dev->I2cDevAddr, index, buf, 2);
 	if (status_int < 0) {
-		SYS_LOG_ERR("i2c_burst_read failed");
+		LOG_ERR("i2c_burst_read failed");
 		return -EIO;
 	}
 	*data = ((uint16_t)buf[0]<<8) + (uint16_t)buf[1];
@@ -180,7 +178,7 @@ VL53L0X_Error  VL53L0X_RdDWord(VL53L0X_DEV Dev, uint8_t index, uint32_t *data)
 
 	status_int = i2c_burst_read(Dev->i2c, Dev->I2cDevAddr, index, buf, 4);
 	if (status_int < 0) {
-		SYS_LOG_ERR("i2c_burst_read failed");
+		LOG_ERR("i2c_burst_read failed");
 		return -EIO;
 	}
 	*data = ((uint32_t)buf[0]<<24) + ((uint32_t)buf[1]<<16) +
@@ -191,9 +189,7 @@ VL53L0X_Error  VL53L0X_RdDWord(VL53L0X_DEV Dev, uint8_t index, uint32_t *data)
 
 VL53L0X_Error VL53L0X_PollingDelay(VL53L0X_DEV Dev)
 {
-	VL53L0X_Error status = VL53L0X_ERROR_NONE;
-
-	k_sleep(2);
-	return status;
+	k_sleep(K_MSEC(2));
+	return VL53L0X_ERROR_NONE;
 }
 

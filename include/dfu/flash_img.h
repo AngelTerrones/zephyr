@@ -5,8 +5,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __FLASH_IMG_H__
-#define __FLASH_IMG_H__
+#ifndef ZEPHYR_INCLUDE_DFU_FLASH_IMG_H_
+#define ZEPHYR_INCLUDE_DFU_FLASH_IMG_H_
+
+#include <storage/flash_map.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,18 +16,22 @@ extern "C" {
 
 struct flash_img_context {
 	u8_t buf[CONFIG_IMG_BLOCK_BUF_SIZE];
-	struct device *dev;
+	const struct flash_area *flash_area;
 	size_t bytes_written;
 	u16_t buf_bytes;
+#ifdef CONFIG_IMG_ERASE_PROGRESSIVELY
+	off_t off_last;
+#endif
 };
 
 /**
  * @brief Initialize context needed for writing the image to the flash.
  *
  * @param ctx context to be initialized
- * @param dev flash driver to used while writing the image
+ *
+ * @return  0 on success, negative errno code on fail
  */
-void flash_img_init(struct flash_img_context *ctx, struct device *dev);
+int flash_img_init(struct flash_img_context *ctx);
 
 /**
  * @brief Read number of bytes of the image written to the flash.
@@ -60,4 +66,4 @@ int flash_img_buffered_write(struct flash_img_context *ctx, u8_t *data,
 }
 #endif
 
-#endif	/* __FLASH_IMG_H__ */
+#endif	/* ZEPHYR_INCLUDE_DFU_FLASH_IMG_H_ */

@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+
 mainmenu "SPI Loopback Test"
 
-source "$ZEPHYR_BASE/Kconfig.zephyr"
+source "Kconfig.zephyr"
 
 config SPI_LOOPBACK_DRV_NAME
 	string "SPI device name to use for test"
-	default SPI_1_NAME
 
 config SPI_LOOPBACK_CS_GPIO
 	bool "SPI port CS pin is controlled via a GPIO port during test"
@@ -31,3 +32,7 @@ config SPI_LOOPBACK_SLOW_FREQ
 config SPI_LOOPBACK_FAST_FREQ
 	int "The frequency in Hz to use when testing in fast mode"
 	default 16000000
+
+config SPI_LOOPBACK_MODE_LOOP
+	bool "Configure the SPI in LOOP mode, so that no extra wiring is needed"
+	default n

@@ -9,13 +9,13 @@
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <string.h>
-#include <misc/printk.h>
+#include <sys/printk.h>
 
 #include <net/buf.h>
 
 #include <ztest.h>
 
-#define TEST_TIMEOUT SECONDS(1)
+#define TEST_TIMEOUT K_SECONDS(1)
 
 struct bt_data {
 	void *hci_sync;
@@ -189,7 +189,7 @@ static void net_buf_test_3(void)
 	k_thread_create(&test_3_thread_data, test_3_thread_stack,
 			K_THREAD_STACK_SIZEOF(test_3_thread_stack),
 			(k_thread_entry_t) test_3_thread, &fifo, &sema, NULL,
-			K_PRIO_COOP(7), 0, 0);
+			K_PRIO_COOP(7), 0, K_NO_WAIT);
 
 	zassert_true(k_sem_take(&sema, TEST_TIMEOUT) == 0,
 		    "Timeout while waiting for semaphore");
@@ -340,7 +340,7 @@ static void net_buf_test_big_buf(void)
 	}
 
 	ipv6 = (struct ipv6_hdr *)(frag->data - net_buf_headroom(frag));
-	udp = (struct udp_hdr *)((void *)ipv6 + sizeof(*ipv6));
+	udp = (struct udp_hdr *)((u8_t *)ipv6 + sizeof(*ipv6));
 
 	net_buf_frag_add(buf, frag);
 	net_buf_unref(buf);
@@ -393,7 +393,7 @@ static void net_buf_test_multi_frags(void)
 	}
 
 	ipv6 = (struct ipv6_hdr *)(frags[i]->data - net_buf_headroom(frags[i]));
-	udp = (struct udp_hdr *)((void *)ipv6 + sizeof(*ipv6));
+	udp = (struct udp_hdr *)((u8_t *)ipv6 + sizeof(*ipv6));
 
 	net_buf_unref(buf);
 

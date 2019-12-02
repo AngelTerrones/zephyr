@@ -17,24 +17,26 @@
  * in the offsets.o module.
  */
 
-#ifndef _kernel_arch_data__h_
-#define _kernel_arch_data__h_
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifndef ZEPHYR_ARCH_XTENSA_INCLUDE_KERNEL_ARCH_DATA_H_
+#define ZEPHYR_ARCH_XTENSA_INCLUDE_KERNEL_ARCH_DATA_H_
 
 #include <toolchain.h>
 #include <linker/sections.h>
 #include <arch/cpu.h>
-#include <kernel_arch_thread.h>
+
+/* stacks */
+#define STACK_ROUND_UP(x) ROUND_UP(x, STACK_ALIGN_SIZE)
+#define STACK_ROUND_DOWN(x) ROUND_DOWN(x, STACK_ALIGN_SIZE)
 
 #if !defined(_ASMLANGUAGE) && !defined(__ASSEMBLER__)
 #include <kernel.h>            /* public kernel API */
-#include <kernel_internal.h>
 #include <zephyr/types.h>
-#include <misc/dlist.h>
-#include <misc/util.h>
+#include <sys/dlist.h>
+#include <sys/util.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Bitmask definitions for the struct k_thread->flags bit field */
 
@@ -47,25 +49,10 @@ extern "C" {
 
 typedef struct __esf __esf_t;
 
-struct _kernel_arch {
-};
-
-typedef struct _kernel_arch _kernel_arch_t;
-
-#endif /*! _ASMLANGUAGE && ! __ASSEMBLER__ */
-
-#ifdef CONFIG_USE_SWITCH
-void xtensa_switch(void *switch_to, void **switched_from);
-#define _arch_switch xtensa_switch
-#endif
-
-/* stacks */
-#define STACK_ROUND_UP(x) ROUND_UP(x, STACK_ALIGN_SIZE)
-#define STACK_ROUND_DOWN(x) ROUND_DOWN(x, STACK_ALIGN_SIZE)
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* _kernel_arch_data__h_ */
+#endif /*! _ASMLANGUAGE && ! __ASSEMBLER__ */
 
+#endif /* ZEPHYR_ARCH_XTENSA_INCLUDE_KERNEL_ARCH_DATA_H_ */

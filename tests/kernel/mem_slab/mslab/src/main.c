@@ -61,7 +61,7 @@ void helper_thread(void)
 {
 	void *ptr[NUMBLOCKS];           /* Pointer to memory block */
 
-	memset(ptr, 0, sizeof(ptr));    /* keep static checkers happy */
+	(void)memset(ptr, 0, sizeof(ptr));    /* keep static checkers happy */
 	/* Wait for part 1 to complete */
 	k_sem_take(&SEM_REGRESSDONE, K_FOREVER);
 
@@ -215,7 +215,7 @@ void test_mslab(void)
 	void *ptr[NUMBLOCKS];           /* Pointer to memory block */
 
 	/* not strictly necessary, but keeps coverity checks happy */
-	memset(ptr, 0, sizeof(ptr));
+	(void)memset(ptr, 0, sizeof(ptr));
 
 	/* Part 1 of test */
 
@@ -243,13 +243,13 @@ void test_mslab(void)
 	TC_PRINT("(3) - Further allocation results in  timeout "
 		 "in <%s>\n", __func__);
 
-	ret_value = k_mem_slab_alloc(&map_lgblks, &b, 20);
+	ret_value = k_mem_slab_alloc(&map_lgblks, &b, K_MSEC(20));
 	zassert_equal(-EAGAIN, ret_value,
 		      "Failed k_mem_slab_alloc, retValue %d\n", ret_value);
 
 	TC_PRINT("%s: start to wait for block\n", __func__);
 	k_sem_give(&SEM_REGRESSDONE);    /* Allow helper thread to run part 4 */
-	ret_value = k_mem_slab_alloc(&map_lgblks, &b, 50);
+	ret_value = k_mem_slab_alloc(&map_lgblks, &b, K_MSEC(50));
 	zassert_equal(0, ret_value,
 		      "Failed k_mem_slab_alloc, ret_value %d\n", ret_value);
 
@@ -281,6 +281,6 @@ K_THREAD_DEFINE(HELPER, STACKSIZE, helper_thread, NULL, NULL, NULL,
 void test_main(void)
 {
 	ztest_test_suite(memory_slab,
-			 ztest_unit_test(test_mslab));
+			 ztest_1cpu_unit_test(test_mslab));
 	ztest_run_test_suite(memory_slab);
 }

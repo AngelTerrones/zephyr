@@ -10,6 +10,7 @@
 typedef enum __packed {
 	BT_CONN_DISCONNECTED,
 	BT_CONN_CONNECT_SCAN,
+	BT_CONN_CONNECT_DIR_ADV,
 	BT_CONN_CONNECT,
 	BT_CONN_CONNECTED,
 	BT_CONN_DISCONNECT,
@@ -25,7 +26,10 @@ enum {
 	BT_CONN_BR_PAIRING_INITIATOR,	/* local host starts authentication */
 	BT_CONN_CLEANUP,                /* Disconnected, pending cleanup */
 	BT_CONN_AUTO_PHY_UPDATE,        /* Auto-update PHY */
-	BT_CONN_AUTO_DATA_LEN,          /* Auto data len change in progress */
+	BT_CONN_SLAVE_PARAM_UPDATE,	/* If slave param update timer fired */
+	BT_CONN_SLAVE_PARAM_SET,	/* If slave param were set from app */
+	BT_CONN_SLAVE_PARAM_L2CAP,	/* If should force L2CAP for CPUP */
+	BT_CONN_FORCE_PAIR,             /* Pairing even with existing keys. */
 
 	/* Total number of flags - must be at the end of the enum */
 	BT_CONN_NUM_FLAGS,
@@ -43,13 +47,12 @@ struct bt_conn_le {
 
 	u16_t			latency;
 	u16_t			timeout;
+	u16_t			pending_latency;
+	u16_t			pending_timeout;
 
 	u8_t			features[8];
 
 	struct bt_keys		*keys;
-
-	/* Delayed work for connection update and timeout handling */
-	struct k_delayed_work	update_work;
 };
 
 #if defined(CONFIG_BT_BREDR)
@@ -74,11 +77,16 @@ struct bt_conn_sco {
 };
 #endif
 
-typedef void (*bt_conn_tx_cb_t)(struct bt_conn *conn);
+typedef void (*bt_conn_tx_cb_t)(struct bt_conn *conn, void *user_data);
 
 struct bt_conn_tx {
 	sys_snode_t node;
+
 	bt_conn_tx_cb_t cb;
+	void *user_data;
+
+	/* Number of pending packets without a callback after this one */
+	u32_t pending_no_cb;
 };
 
 struct bt_conn {
@@ -105,10 +113,17 @@ struct bt_conn {
 	u16_t		        rx_len;
 	struct net_buf		*rx;
 
-	/* Sent but not acknowledged TX packets */
+	/* Sent but not acknowledged TX packets with a callback */
 	sys_slist_t		tx_pending;
-	/* Acknowledged but not yet notified TX packets */
-	struct k_fifo		tx_notify;
+	/* Sent but not acknowledged TX packets without a callback before
+	 * the next packet (if any) in tx_pending.
+	 */
+	u32_t                   pending_no_cb;
+
+	/* Completed TX for which we need to call the callback */
+	sys_slist_t		tx_complete;
+	struct k_work           tx_complete_work;
+
 
 	/* Queue for outgoing ACL data */
 	struct k_fifo		tx_queue;
@@ -117,6 +132,9 @@ struct bt_conn {
 	sys_slist_t		channels;
 
 	atomic_t		ref;
+
+	/* Delayed work for connection update and other deferred tasks */
+	struct k_delayed_work	update_work;
 
 	union {
 		struct bt_conn_le	le;
@@ -132,15 +150,15 @@ void bt_conn_recv(struct bt_conn *conn, struct net_buf *buf, u8_t flags);
 
 /* Send data over a connection */
 int bt_conn_send_cb(struct bt_conn *conn, struct net_buf *buf,
-		    bt_conn_tx_cb_t cb);
+		    bt_conn_tx_cb_t cb, void *user_data);
 
 static inline int bt_conn_send(struct bt_conn *conn, struct net_buf *buf)
 {
-	return bt_conn_send_cb(conn, buf, NULL);
+	return bt_conn_send_cb(conn, buf, NULL, NULL);
 }
 
 /* Add a new LE connection */
-struct bt_conn *bt_conn_add_le(const bt_addr_le_t *peer);
+struct bt_conn *bt_conn_add_le(u8_t id, const bt_addr_le_t *peer);
 
 /* Add a new BR/EDR connection */
 struct bt_conn *bt_conn_add_br(const bt_addr_t *peer);
@@ -161,6 +179,7 @@ void bt_conn_pin_code_req(struct bt_conn *conn);
 u8_t bt_conn_get_io_capa(void);
 u8_t bt_conn_ssp_get_auth(const struct bt_conn *conn);
 void bt_conn_ssp_auth(struct bt_conn *conn, u32_t passkey);
+void bt_conn_ssp_auth_complete(struct bt_conn *conn, u8_t status);
 
 void bt_conn_disconnect_all(u8_t id);
 
@@ -176,7 +195,6 @@ int bt_conn_addr_le_cmp(const struct bt_conn *conn, const bt_addr_le_t *peer);
  * e.g. as the handle since that's assigned to us by the controller.
  */
 #define BT_CONN_ID_INVALID 0xff
-u8_t bt_conn_get_id(struct bt_conn *conn);
 struct bt_conn *bt_conn_lookup_id(u8_t id);
 
 /* Look up a connection state. For BT_ADDR_LE_ANY, returns the first connection
@@ -206,11 +224,15 @@ void bt_conn_identity_resolved(struct bt_conn *conn);
 
 #if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_BREDR)
 /* Notify higher layers that connection security changed */
-void bt_conn_security_changed(struct bt_conn *conn);
+void bt_conn_security_changed(struct bt_conn *conn, enum bt_security_err err);
 #endif /* CONFIG_BT_SMP || CONFIG_BT_BREDR */
 
 /* Prepare a PDU to be sent over a connection */
-struct net_buf *bt_conn_create_pdu(struct net_buf_pool *pool, size_t reserve);
+struct net_buf *bt_conn_create_pdu_timeout(struct net_buf_pool *pool,
+					   size_t reserve, s32_t timeout);
+
+#define bt_conn_create_pdu(_pool, _reserve) \
+	bt_conn_create_pdu_timeout(_pool, _reserve, K_FOREVER)
 
 /* Initialize connection management */
 int bt_conn_init(void);
@@ -221,4 +243,3 @@ struct k_sem *bt_conn_get_pkts(struct bt_conn *conn);
 /* k_poll related helpers for the TX thread */
 int bt_conn_prepare_events(struct k_poll_event events[]);
 void bt_conn_process_tx(struct bt_conn *conn);
-void bt_conn_notify_tx(struct bt_conn *conn);

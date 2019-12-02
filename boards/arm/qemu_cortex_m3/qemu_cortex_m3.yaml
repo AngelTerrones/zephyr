@@ -8,10 +8,9 @@ toolchain:
   - gnuarmemb
   - xtools
 supported:
-  - netif:slip
+  - netif:serial-net
 ram: 64
 flash: 256
 testing:
-  default: true
   ignore_tags:
     - net

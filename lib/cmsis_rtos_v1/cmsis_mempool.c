@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <kernel_structs.h>
+#include <kernel.h>
 #include <cmsis_os.h>
+#include <string.h>
 
 #define TIME_OUT	100
 
@@ -14,7 +15,7 @@
  */
 osPoolId osPoolCreate(const osPoolDef_t *pool_def)
 {
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return NULL;
 	}
 
@@ -47,7 +48,7 @@ void *osPoolCAlloc(osPoolId pool_id)
 
 	if (k_mem_slab_alloc((struct k_mem_slab *)(osPool->pool),
 				&ptr, TIME_OUT) == 0) {
-		memset(ptr, 0, osPool->item_sz);
+		(void)memset(ptr, 0, osPool->item_sz);
 		return ptr;
 	} else {
 		return NULL;

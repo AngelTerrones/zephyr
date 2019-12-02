@@ -6,10 +6,13 @@
  */
 
 #include <kernel.h>
-#include <sensor.h>
-#include <gpio.h>
+#include <drivers/sensor.h>
+#include <drivers/gpio.h>
 
 #include "bmi160.h"
+
+#include <logging/log.h>
+LOG_MODULE_DECLARE(BMI160, CONFIG_SENSOR_LOG_LEVEL);
 
 static void bmi160_handle_anymotion(struct device *dev)
 {
@@ -127,7 +130,7 @@ static int bmi160_trigger_drdy_set(struct device *dev,
 				   sensor_trigger_handler_t handler)
 {
 	struct bmi160_device_data *bmi160 = dev->driver_data;
-	u8_t drdy_en = 0;
+	u8_t drdy_en = 0U;
 
 #if !defined(CONFIG_BMI160_ACCEL_PMU_SUSPEND)
 	if (chan == SENSOR_CHAN_ACCEL_XYZ) {
@@ -162,7 +165,7 @@ static int bmi160_trigger_anym_set(struct device *dev,
 				   sensor_trigger_handler_t handler)
 {
 	struct bmi160_device_data *bmi160 = dev->driver_data;
-	u8_t anym_en = 0;
+	u8_t anym_en = 0U;
 
 	bmi160->handler_anymotion = handler;
 
@@ -213,7 +216,7 @@ int bmi160_acc_slope_config(struct device *dev, enum sensor_attribute attr,
 			return -EINVAL;
 		}
 
-		reg_val = 512 * (slope_th_ums2 - 1) / (acc_range_g * SENSOR_G);
+		reg_val = (slope_th_ums2 - 1) * 512U / (acc_range_g * SENSOR_G);
 
 		if (bmi160_byte_write(dev, BMI160_REG_INT_MOTION1,
 				      reg_val) < 0) {
@@ -275,7 +278,7 @@ int bmi160_trigger_mode_init(struct device *dev)
 
 	bmi160->gpio = device_get_binding((char *)cfg->gpio_port);
 	if (!bmi160->gpio) {
-		SYS_LOG_DBG("Gpio controller %s not found.", cfg->gpio_port);
+		LOG_DBG("Gpio controller %s not found.", cfg->gpio_port);
 		return -EINVAL;
 	}
 
@@ -285,7 +288,7 @@ int bmi160_trigger_mode_init(struct device *dev)
 	k_thread_create(&bmi160_thread, bmi160_thread_stack,
 			CONFIG_BMI160_THREAD_STACK_SIZE,
 			bmi160_thread_main, dev, NULL, NULL,
-			K_PRIO_COOP(CONFIG_BMI160_THREAD_PRIORITY), 0, 0);
+			K_PRIO_COOP(CONFIG_BMI160_THREAD_PRIORITY), 0, K_NO_WAIT);
 #elif defined(CONFIG_BMI160_TRIGGER_GLOBAL_THREAD)
 	bmi160->work.handler = bmi160_work_handler;
 	bmi160->dev = dev;
@@ -293,7 +296,7 @@ int bmi160_trigger_mode_init(struct device *dev)
 
 	/* map all interrupts to INT1 pin */
 	if (bmi160_word_write(dev, BMI160_REG_INT_MAP0, 0xf0ff) < 0) {
-		SYS_LOG_DBG("Failed to map interrupts.");
+		LOG_DBG("Failed to map interrupts.");
 		return -EIO;
 	}
 

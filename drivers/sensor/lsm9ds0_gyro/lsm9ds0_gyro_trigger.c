@@ -4,19 +4,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <sensor.h>
+#include <drivers/sensor.h>
 #include <kernel.h>
 #include <device.h>
 #include <init.h>
-#include <i2c.h>
-#include <misc/byteorder.h>
-#include <misc/__assert.h>
-
-#include <gpio.h>
+#include <drivers/i2c.h>
+#include <sys/byteorder.h>
+#include <sys/__assert.h>
+#include <logging/log.h>
+#include <drivers/gpio.h>
 
 #include "lsm9ds0_gyro.h"
 
 extern struct lsm9ds0_gyro_data lsm9ds0_gyro_data;
+
+LOG_MODULE_DECLARE(LSM9DS0_GYRO, CONFIG_SENSOR_LOG_LEVEL);
 
 int lsm9ds0_gyro_trigger_set(struct device *dev,
 			     const struct sensor_trigger *trig,
@@ -31,9 +33,9 @@ int lsm9ds0_gyro_trigger_set(struct device *dev,
 		gpio_pin_disable_callback(data->gpio_drdy,
 					  config->gpio_drdy_int_pin);
 
-		state = 0;
+		state = 0U;
 		if (handler) {
-			state = 1;
+			state = 1U;
 		}
 
 		data->handler_drdy = handler;
@@ -45,7 +47,7 @@ int lsm9ds0_gyro_trigger_set(struct device *dev,
 					LSM9DS0_GYRO_MASK_CTRL_REG3_G_I2_DRDY,
 					state << LSM9DS0_GYRO_SHIFT_CTRL_REG3_G_I2_DRDY)
 					< 0) {
-			SYS_LOG_DBG("failed to set DRDY interrupt");
+			LOG_DBG("failed to set DRDY interrupt");
 			return -EIO;
 		}
 
@@ -100,11 +102,11 @@ int lsm9ds0_gyro_init_interrupt(struct device *dev)
 	k_thread_create(&data->thread, data->thread_stack,
 			CONFIG_LSM9DS0_GYRO_THREAD_STACK_SIZE,
 			lsm9ds0_gyro_thread_main, dev, NULL, NULL,
-			K_PRIO_COOP(10), 0, 0);
+			K_PRIO_COOP(10), 0, K_NO_WAIT);
 
 	data->gpio_drdy = device_get_binding(config->gpio_drdy_dev_name);
 	if (!data->gpio_drdy) {
-		SYS_LOG_DBG("gpio controller %s not found",
+		LOG_DBG("gpio controller %s not found",
 			    config->gpio_drdy_dev_name);
 		return -EINVAL;
 	}
@@ -118,7 +120,7 @@ int lsm9ds0_gyro_init_interrupt(struct device *dev)
 			   BIT(config->gpio_drdy_int_pin));
 
 	if (gpio_add_callback(data->gpio_drdy, &data->gpio_cb) < 0) {
-		SYS_LOG_DBG("failed to set gpio callback");
+		LOG_DBG("failed to set gpio callback");
 		return -EINVAL;
 	}
 

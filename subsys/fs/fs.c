@@ -9,10 +9,12 @@
 #include <zephyr/types.h>
 #include <errno.h>
 #include <init.h>
-#include <fs.h>
+#include <fs/fs.h>
 
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_FS_LEVEL
-#include <logging/sys_log.h>
+
+#define LOG_LEVEL CONFIG_FS_LOG_LEVEL
+#include <logging/log.h>
+LOG_MODULE_REGISTER(fs);
 
 /* list of mounted file systems */
 static sys_dlist_t fs_mnt_list;
@@ -23,8 +25,8 @@ static struct k_mutex mutex;
 /* file system map table */
 static struct fs_file_system_t *fs_map[FS_TYPE_END];
 
-int fs_get_mnt_point(struct fs_mount_t **mnt_pntp,
-		     const char *name, size_t *match_len)
+static int fs_get_mnt_point(struct fs_mount_t **mnt_pntp,
+			    const char *name, size_t *match_len)
 {
 	struct fs_mount_t *mnt_p = NULL, *itr;
 	size_t longest_match = 0;
@@ -80,13 +82,13 @@ int fs_open(struct fs_file_t *zfp, const char *file_name)
 
 	if ((file_name == NULL) ||
 			(strlen(file_name) <= 1) || (file_name[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, file_name, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
@@ -95,7 +97,7 @@ int fs_open(struct fs_file_t *zfp, const char *file_name)
 	if (zfp->mp->fs->open != NULL) {
 		rc = zfp->mp->fs->open(zfp, file_name);
 		if (rc < 0) {
-			SYS_LOG_ERR("file open error (%d)", rc);
+			LOG_ERR("file open error (%d)", rc);
 			return rc;
 		}
 	}
@@ -110,7 +112,7 @@ int fs_close(struct fs_file_t *zfp)
 	if (zfp->mp->fs->close != NULL) {
 		rc = zfp->mp->fs->close(zfp);
 		if (rc < 0) {
-			SYS_LOG_ERR("file close error (%d)", rc);
+			LOG_ERR("file close error (%d)", rc);
 			return rc;
 		}
 	}
@@ -127,7 +129,7 @@ ssize_t fs_read(struct fs_file_t *zfp, void *ptr, size_t size)
 	if (zfp->mp->fs->read != NULL) {
 		rc = zfp->mp->fs->read(zfp, ptr, size);
 		if (rc < 0) {
-			SYS_LOG_ERR("file read error (%d)", rc);
+			LOG_ERR("file read error (%d)", rc);
 		}
 	}
 
@@ -141,7 +143,7 @@ ssize_t fs_write(struct fs_file_t *zfp, const void *ptr, size_t size)
 	if (zfp->mp->fs->write != NULL) {
 		rc = zfp->mp->fs->write(zfp, ptr, size);
 		if (rc < 0) {
-			SYS_LOG_ERR("file write error (%d)", rc);
+			LOG_ERR("file write error (%d)", rc);
 		}
 	}
 
@@ -155,7 +157,7 @@ int fs_seek(struct fs_file_t *zfp, off_t offset, int whence)
 	if (zfp->mp->fs->lseek != NULL) {
 		rc = zfp->mp->fs->lseek(zfp, offset, whence);
 		if (rc < 0) {
-			SYS_LOG_ERR("file seek error (%d)", rc);
+			LOG_ERR("file seek error (%d)", rc);
 		}
 	}
 
@@ -169,7 +171,7 @@ off_t fs_tell(struct fs_file_t *zfp)
 	if (zfp->mp->fs->tell != NULL) {
 		rc = zfp->mp->fs->tell(zfp);
 		if (rc < 0) {
-			SYS_LOG_ERR("file tell error (%d)", rc);
+			LOG_ERR("file tell error (%d)", rc);
 		}
 	}
 
@@ -183,7 +185,7 @@ int fs_truncate(struct fs_file_t *zfp, off_t length)
 	if (zfp->mp->fs->truncate != NULL) {
 		rc = zfp->mp->fs->truncate(zfp, length);
 		if (rc < 0) {
-			SYS_LOG_ERR("file truncate error (%d)", rc);
+			LOG_ERR("file truncate error (%d)", rc);
 		}
 	}
 
@@ -197,7 +199,7 @@ int fs_sync(struct fs_file_t *zfp)
 	if (zfp->mp->fs->sync != NULL) {
 		rc = zfp->mp->fs->sync(zfp);
 		if (rc < 0) {
-			SYS_LOG_ERR("file sync error (%d)", rc);
+			LOG_ERR("file sync error (%d)", rc);
 		}
 	}
 
@@ -211,14 +213,26 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 	int rc = -EINVAL;
 
 	if ((abs_path == NULL) ||
-			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+			(strlen(abs_path) < 1) || (abs_path[0] != '/')) {
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
+	}
+
+	if (strcmp(abs_path, "/") == 0) {
+		/* Open VFS root dir, marked by zdp->mp == NULL */
+		k_mutex_lock(&mutex, K_FOREVER);
+
+		zdp->mp = NULL;
+		zdp->dirp = sys_dlist_peek_head(&fs_mnt_list);
+
+		k_mutex_unlock(&mutex);
+
+		return 0;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
@@ -227,7 +241,7 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 	if (zdp->mp->fs->opendir != NULL) {
 		rc = zdp->mp->fs->opendir(zdp, abs_path);
 		if (rc < 0) {
-			SYS_LOG_ERR("directory open error (%d)", rc);
+			LOG_ERR("directory open error (%d)", rc);
 		}
 	}
 
@@ -236,25 +250,97 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 
 int fs_readdir(struct fs_dir_t *zdp, struct fs_dirent *entry)
 {
-	int rc = -EINVAL;
+	if (zdp->mp) {
+		/* Delegate to mounted filesystem */
+		int rc = -EINVAL;
 
-	if (zdp->mp->fs->readdir != NULL) {
-		rc = zdp->mp->fs->readdir(zdp, entry);
-		if (rc < 0) {
-			SYS_LOG_ERR("directory read error (%d)", rc);
+		if (zdp->mp->fs->readdir != NULL) {
+			/* Loop until error or not special directory */
+			while (true) {
+				rc = zdp->mp->fs->readdir(zdp, entry);
+				if (rc < 0) {
+					break;
+				}
+				if (entry->name[0] == 0) {
+					break;
+				}
+				if (entry->type != FS_DIR_ENTRY_DIR) {
+					break;
+				}
+				if ((strcmp(entry->name, ".") != 0)
+				    && (strcmp(entry->name, "..") != 0)) {
+					break;
+				}
+			}
+			if (rc < 0) {
+				LOG_ERR("directory read error (%d)", rc);
+			}
+		}
+
+		return rc;
+	}
+
+	/* VFS root dir */
+	if (zdp->dirp == NULL) {
+		/* No more entries */
+		entry->name[0] = 0;
+		return 0;
+	}
+
+	/* Find the current and next entries in the mount point dlist */
+	sys_dnode_t *node, *next = NULL;
+	bool found = false;
+
+	k_mutex_lock(&mutex, K_FOREVER);
+
+	SYS_DLIST_FOR_EACH_NODE(&fs_mnt_list, node) {
+		if (node == zdp->dirp) {
+			found = true;
+
+			/* Pull info from current entry */
+			struct fs_mount_t *mnt;
+
+			mnt = CONTAINER_OF(node, struct fs_mount_t, node);
+
+			entry->type = FS_DIR_ENTRY_DIR;
+			strncpy(entry->name, mnt->mnt_point + 1,
+				sizeof(entry->name) - 1);
+			entry->name[sizeof(entry->name) - 1] = 0;
+			entry->size = 0;
+
+			/* Save pointer to the next one, for later */
+			next = sys_dlist_peek_next(&fs_mnt_list, node);
+			break;
 		}
 	}
-	return rc;
+
+	k_mutex_unlock(&mutex);
+
+	if (!found) {
+		/* Current entry must have been removed before this
+		 * call to readdir -- return an error
+		 */
+		return -ENOENT;
+	}
+
+	zdp->dirp = next;
+	return 0;
 }
 
 int fs_closedir(struct fs_dir_t *zdp)
 {
 	int rc = -EINVAL;
 
+	if (zdp->mp == NULL) {
+		/* VFS root dir */
+		zdp->dirp = NULL;
+		return 0;
+	}
+
 	if (zdp->mp->fs->closedir != NULL) {
 		rc = zdp->mp->fs->closedir(zdp);
 		if (rc < 0) {
-			SYS_LOG_ERR("directory close error (%d)", rc);
+			LOG_ERR("directory close error (%d)", rc);
 			return rc;
 		}
 	}
@@ -271,20 +357,20 @@ int fs_mkdir(const char *abs_path)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
 	if (mp->fs->mkdir != NULL) {
 		rc = mp->fs->mkdir(mp, abs_path);
 		if (rc < 0) {
-			SYS_LOG_ERR("failed to create directory (%d)", rc);
+			LOG_ERR("failed to create directory (%d)", rc);
 		}
 	}
 
@@ -298,20 +384,20 @@ int fs_unlink(const char *abs_path)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
 	if (mp->fs->unlink != NULL) {
 		rc = mp->fs->unlink(mp, abs_path);
 		if (rc < 0) {
-			SYS_LOG_ERR("failed to unlink path (%d)", rc);
+			LOG_ERR("failed to unlink path (%d)", rc);
 		}
 	}
 
@@ -326,26 +412,26 @@ int fs_rename(const char *from, const char *to)
 
 	if ((from == NULL) || (strlen(from) <= 1) || (from[0] != '/') ||
 			(to == NULL) || (strlen(to) <= 1) || (to[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, from, &match_len);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
 	/* Make sure both files are mounted on the same path */
 	if (strncmp(from, to, match_len) != 0) {
-		SYS_LOG_ERR("mount point not same!!");
+		LOG_ERR("mount point not same!!");
 		return -EINVAL;
 	}
 
 	if (mp->fs->rename != NULL) {
 		rc = mp->fs->rename(mp, from, to);
 		if (rc < 0) {
-			SYS_LOG_ERR("failed to rename file or dir (%d)", rc);
+			LOG_ERR("failed to rename file or dir (%d)", rc);
 		}
 	}
 
@@ -359,20 +445,20 @@ int fs_stat(const char *abs_path, struct fs_dirent *entry)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
 	if (mp->fs->stat != NULL) {
 		rc = mp->fs->stat(mp, abs_path, entry);
 		if (rc < 0) {
-			SYS_LOG_ERR("failed get file or dir stat (%d)", rc);
+			LOG_ERR("failed get file or dir stat (%d)", rc);
 		}
 	}
 	return rc;
@@ -385,20 +471,20 @@ int fs_statvfs(const char *abs_path, struct fs_statvfs *stat)
 
 	if ((abs_path == NULL) ||
 			(strlen(abs_path) <= 1) || (abs_path[0] != '/')) {
-		SYS_LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name!!");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		SYS_LOG_ERR("%s:mount point not found!!", __func__);
+		LOG_ERR("%s:mount point not found!!", __func__);
 		return rc;
 	}
 
 	if (mp->fs->statvfs != NULL) {
 		rc = mp->fs->statvfs(mp, abs_path, stat);
 		if (rc < 0) {
-			SYS_LOG_ERR("failed get file or dir stat (%d)", rc);
+			LOG_ERR("failed get file or dir stat (%d)", rc);
 		}
 	}
 
@@ -413,14 +499,14 @@ int fs_mount(struct fs_mount_t *mp)
 	int rc = -EINVAL;
 
 	if ((mp == NULL) || (mp->mnt_point == NULL)) {
-		SYS_LOG_ERR("mount point not initialized!!");
+		LOG_ERR("mount point not initialized!!");
 		return -EINVAL;
 	}
 
 	k_mutex_lock(&mutex, K_FOREVER);
 	/* Check if requested file system is registered */
 	if (mp->type >= FS_TYPE_END ||  fs_map[mp->type] == NULL) {
-		SYS_LOG_ERR("requested file system not registered!!");
+		LOG_ERR("requested file system not registered!!");
 		rc = -ENOENT;
 		goto mount_err;
 	}
@@ -431,13 +517,13 @@ int fs_mount(struct fs_mount_t *mp)
 
 	if ((mp->mnt_point[0] != '/') ||
 			(strlen(mp->mnt_point) <= 1)) {
-		SYS_LOG_ERR("invalid mount point!!");
+		LOG_ERR("invalid mount point!!");
 		rc = -EINVAL;
 		goto mount_err;
 	}
 
 	if (fs->mount == NULL) {
-		SYS_LOG_ERR("fs ops functions not set!!");
+		LOG_ERR("fs ops functions not set!!");
 		rc = -EINVAL;
 		goto mount_err;
 	}
@@ -452,7 +538,7 @@ int fs_mount(struct fs_mount_t *mp)
 
 		if (strncmp(mp->mnt_point, itr->mnt_point,
 					mp->mountp_len) == 0) {
-			SYS_LOG_ERR("mount Point already exists!!");
+			LOG_ERR("mount Point already exists!!");
 			rc = -EBUSY;
 			goto mount_err;
 		}
@@ -461,7 +547,7 @@ int fs_mount(struct fs_mount_t *mp)
 
 	rc = fs->mount(mp);
 	if (rc < 0) {
-		SYS_LOG_ERR("fs mount error (%d)", rc);
+		LOG_ERR("fs mount error (%d)", rc);
 		goto mount_err;
 	}
 
@@ -470,7 +556,7 @@ int fs_mount(struct fs_mount_t *mp)
 
 	/*  append to the mount list */
 	sys_dlist_append(&fs_mnt_list, &mp->node);
-	SYS_LOG_DBG("fs mouted, mount point:%s", mp->mnt_point);
+	LOG_DBG("fs mounted at %s", log_strdup(mp->mnt_point));
 
 mount_err:
 	k_mutex_unlock(&mutex);
@@ -484,20 +570,20 @@ int fs_unmount(struct fs_mount_t *mp)
 
 	if ((mp == NULL) || (mp->mnt_point == NULL) ||
 				(strlen(mp->mnt_point) <= 1)) {
-		SYS_LOG_ERR("invalid mount point!!");
+		LOG_ERR("invalid mount point!!");
 		return -EINVAL;
 	}
 
 	k_mutex_lock(&mutex, K_FOREVER);
 	if ((mp->fs == NULL) || mp->fs->unmount == NULL) {
-		SYS_LOG_ERR("fs ops functions not set!!");
+		LOG_ERR("fs ops functions not set!!");
 		rc = -EINVAL;
 		goto unmount_err;
 	}
 
 	rc = mp->fs->unmount(mp);
 	if (rc < 0) {
-		SYS_LOG_ERR("fs unmount error (%d)", rc);
+		LOG_ERR("fs unmount error (%d)", rc);
 		goto unmount_err;
 	}
 
@@ -506,11 +592,43 @@ int fs_unmount(struct fs_mount_t *mp)
 
 	/* remove mount node from the list */
 	sys_dlist_remove(&mp->node);
-	SYS_LOG_DBG("fs unmouted, mount point:%s", mp->mnt_point);
+	LOG_DBG("fs unmounted from %s", log_strdup(mp->mnt_point));
 
 unmount_err:
 	k_mutex_unlock(&mutex);
 	return rc;
+}
+
+int fs_readmount(int *number, const char **name)
+{
+	sys_dnode_t *node;
+	int rc = -ENOENT;
+	int cnt = 0;
+	struct fs_mount_t *itr = NULL;
+
+	*name = NULL;
+
+	k_mutex_lock(&mutex, K_FOREVER);
+
+	SYS_DLIST_FOR_EACH_NODE(&fs_mnt_list, node) {
+		if (*number == cnt) {
+			itr = CONTAINER_OF(node, struct fs_mount_t, node);
+			break;
+		}
+
+		++cnt;
+	}
+
+	k_mutex_unlock(&mutex);
+
+	if (itr != NULL) {
+		rc = 0;
+		*name = itr->mnt_point;
+		++(*number);
+	}
+
+	return rc;
+
 }
 
 /* Register File system */
@@ -520,12 +638,12 @@ int fs_register(enum fs_type type, struct fs_file_system_t *fs)
 
 	k_mutex_lock(&mutex, K_FOREVER);
 	if (type >= FS_TYPE_END) {
-		SYS_LOG_ERR("failed to register File system!!");
+		LOG_ERR("failed to register File system!!");
 		rc = -EINVAL;
 		goto reg_err;
 	}
 	fs_map[type] = fs;
-	SYS_LOG_DBG("fs registered of type(%u)", type);
+	LOG_DBG("fs registered of type(%u)", type);
 reg_err:
 	k_mutex_unlock(&mutex);
 	return rc;
@@ -539,12 +657,12 @@ int fs_unregister(enum fs_type type, struct fs_file_system_t *fs)
 	k_mutex_lock(&mutex, K_FOREVER);
 	if ((type >= FS_TYPE_END) ||
 			(fs_map[type] != fs)) {
-		SYS_LOG_ERR("failed to unregister File system!!");
+		LOG_ERR("failed to unregister File system!!");
 		rc = -EINVAL;
 		goto unreg_err;
 	}
 	fs_map[type] = NULL;
-	SYS_LOG_DBG("fs unregistered of type(%u)", type);
+	LOG_DBG("fs unregistered of type(%u)", type);
 unreg_err:
 	k_mutex_unlock(&mutex);
 	return rc;

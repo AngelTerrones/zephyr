@@ -14,14 +14,14 @@
 #ifndef __GPTP_DS_H
 #define __GPTP_DS_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if defined(CONFIG_NET_GPTP)
 
 #include <net/gptp.h>
 #include "gptp_state.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Parameters for PTP data sets. */
 #define GPTP_ALLOWED_LOST_RESP 3
@@ -164,29 +164,11 @@ struct gptp_path_trace {
  * variable declared in gptp_port_ds.
  */
 struct gptp_global_ds {
-	/** The synchronized time computed by the ClockSlave entity. */
-	struct net_ptp_time sync_receipt_time;
-
-	/** Last Grand Master Phase Change. */
-	struct gptp_scaled_ns clk_src_last_gm_phase_change;
-
-	/** Last Grand Master Phase Change. */
-	struct gptp_scaled_ns last_gm_phase_change;
-
-	/** Global flags. */
-	struct gptp_flags global_flags;
-
-	/** System current flags. */
-	struct gptp_flags sys_flags;
-
 	/** Mean time interval between messages providing time-sync info. */
 	u64_t clk_master_sync_itv;
 
 	/** Value if current time. */
 	u64_t sync_receipt_local_time;
-
-	/** Time provided by the ClockSource entity minus the sync time. */
-	s64_t clk_src_phase_offset;
 
 	/** Fractional frequency offset of the Clock Source entity. */
 	double clk_src_freq_offset;
@@ -200,20 +182,20 @@ struct gptp_global_ds {
 	/** Last Grand Master Frequency Change. */
 	double last_gm_freq_change;
 
-	/** Time source. */
-	enum gptp_time_source time_source;
+	/** The synchronized time computed by the ClockSlave entity. */
+	struct net_ptp_extended_time sync_receipt_time;
 
-	/** System time source. */
-	enum gptp_time_source sys_time_source;
+	/** Last Grand Master Phase Change. */
+	struct gptp_scaled_ns clk_src_last_gm_phase_change;
 
-	/** Selected port Roles. */
-	enum gptp_port_state selected_role[CONFIG_NET_GPTP_NUM_PORTS + 1];
+	/** Last Grand Master Phase Change. */
+	struct gptp_scaled_ns last_gm_phase_change;
 
-	/** Reselect port bit array. */
-	u32_t reselect_array;
+	/** Global flags. */
+	struct gptp_flags global_flags;
 
-	/** Selected port bit array. */
-	u32_t selected_array;
+	/** System current flags. */
+	struct gptp_flags sys_flags;
 
 	/** Path trace to be sent in announce message. */
 	struct gptp_path_trace path_trace;
@@ -223,6 +205,24 @@ struct gptp_global_ds {
 
 	/** Previous Grand Master priority vector. */
 	struct gptp_priority_vector last_gm_priority;
+
+	/** Value of current_time when the last invoke call was received. */
+	struct gptp_uscaled_ns local_time;
+
+	/** Time maintained by the ClockMaster entity. */
+	struct net_ptp_extended_time master_time;
+
+	/** Time provided by the ClockSource entity minus the sync time. */
+	struct gptp_scaled_ns clk_src_phase_offset;
+
+	/** Grand Master Time Base Indicator. */
+	u16_t gm_time_base_indicator;
+
+	/** Reselect port bit array. */
+	u32_t reselect_array;
+
+	/** Selected port bit array. */
+	u32_t selected_array;
 
 	/** Steps removed from selected master. */
 	u16_t master_steps_removed;
@@ -239,8 +239,14 @@ struct gptp_global_ds {
 	/** Previous Time Base Indicator. */
 	u16_t clk_src_time_base_indicator_prev;
 
-	/** Grand Master Time Base Indicator. */
-	u16_t gm_time_base_indicator;
+	/** Time source. */
+	enum gptp_time_source time_source;
+
+	/** System time source. */
+	enum gptp_time_source sys_time_source;
+
+	/** Selected port Roles. */
+	enum gptp_port_state selected_role[CONFIG_NET_GPTP_NUM_PORTS + 1];
 
 	/** A Grand Master is present in the domain. */
 	bool gm_present;
@@ -586,10 +592,10 @@ int gptp_get_port_data(struct gptp_domain *domain, int port,
 		       struct gptp_port_bmca_data **port_bmca_data,
 		       struct net_if **iface);
 
-#endif /* CONFIG_NET_GPTP */
-
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* CONFIG_NET_GPTP */
 
 #endif /* __GPTP_DS_H */

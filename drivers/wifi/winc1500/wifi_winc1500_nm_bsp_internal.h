@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __WIFI_WINC1500_NM_BSP_INTERNAL_H__
-#define __WIFI_WINC1500_NM_BSP_INTERNAL_H__
+#ifndef ZEPHYR_DRIVERS_WIFI_WINC1500_WIFI_WINC1500_NM_BSP_INTERNAL_H_
+#define ZEPHYR_DRIVERS_WIFI_WINC1500_WIFI_WINC1500_NM_BSP_INTERNAL_H_
 
 #include <device.h>
-#include <gpio.h>
-#include <spi.h>
+#include <drivers/gpio.h>
+#include <drivers/spi.h>
 
 #include <wifi/winc1500.h>
 
@@ -32,4 +32,4 @@ struct winc1500_device {
 
 extern struct winc1500_device winc1500;
 
-#endif /* __WIFI_WINC1500_NM_BSP_INTERNAL_H__ */
+#endif /* ZEPHYR_DRIVERS_WIFI_WINC1500_WIFI_WINC1500_NM_BSP_INTERNAL_H_ */

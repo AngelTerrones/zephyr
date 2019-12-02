@@ -10,14 +10,14 @@
 #include <stddef.h>
 #include <errno.h>
 #include <zephyr.h>
-#include <misc/printk.h>
+#include <sys/printk.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
 #include <bluetooth/conn.h>
 #include <bluetooth/uuid.h>
 #include <bluetooth/gatt.h>
-#include <misc/byteorder.h>
+#include <sys/byteorder.h>
 
 static struct bt_conn *default_conn;
 
@@ -31,7 +31,7 @@ static u8_t notify_func(struct bt_conn *conn,
 {
 	if (!data) {
 		printk("[UNSUBSCRIBED]\n");
-		params->value_handle = 0;
+		params->value_handle = 0U;
 		return BT_GATT_ITER_STOP;
 	}
 
@@ -48,7 +48,7 @@ static u8_t discover_func(struct bt_conn *conn,
 
 	if (!attr) {
 		printk("Discover complete\n");
-		memset(params, 0, sizeof(*params));
+		(void)memset(params, 0, sizeof(*params));
 		return BT_GATT_ITER_STOP;
 	}
 
@@ -70,7 +70,7 @@ static u8_t discover_func(struct bt_conn *conn,
 		discover_params.uuid = &uuid.uuid;
 		discover_params.start_handle = attr->handle + 2;
 		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
-		subscribe_params.value_handle = attr->handle + 1;
+		subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
 
 		err = bt_gatt_discover(conn, &discover_params);
 		if (err) {
@@ -134,7 +134,7 @@ static bool eir_found(struct bt_data *data, void *user_data)
 	switch (data->type) {
 	case BT_DATA_UUID16_SOME:
 	case BT_DATA_UUID16_ALL:
-		if (data->data_len % sizeof(u16_t) != 0) {
+		if (data->data_len % sizeof(u16_t) != 0U) {
 			printk("AD malformed\n");
 			return true;
 		}
@@ -180,6 +180,20 @@ static void device_found(const bt_addr_le_t *addr, s8_t rssi, u8_t type,
 	}
 }
 
+static int scan_start(void)
+{
+	/* Use active scanning and disable duplicate filtering to handle any
+	 * devices that might update their advertising data at runtime. */
+	struct bt_le_scan_param scan_param = {
+		.type       = BT_HCI_LE_SCAN_ACTIVE,
+		.filter_dup = BT_HCI_LE_SCAN_FILTER_DUP_DISABLE,
+		.interval   = BT_GAP_SCAN_FAST_INTERVAL,
+		.window     = BT_GAP_SCAN_FAST_WINDOW,
+	};
+
+	return bt_le_scan_start(&scan_param, device_found);
+}
+
 static void disconnected(struct bt_conn *conn, u8_t reason)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -187,7 +201,7 @@ static void disconnected(struct bt_conn *conn, u8_t reason)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	printk("Disconnected: %s (reason %u)\n", addr, reason);
+	printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
 
 	if (default_conn != conn) {
 		return;
@@ -196,8 +210,7 @@ static void disconnected(struct bt_conn *conn, u8_t reason)
 	bt_conn_unref(default_conn);
 	default_conn = NULL;
 
-	/* This demo doesn't require active scan */
-	err = bt_le_scan_start(BT_LE_SCAN_PASSIVE, device_found);
+	err = scan_start();
 	if (err) {
 		printk("Scanning failed to start (err %d)\n", err);
 	}
@@ -222,7 +235,7 @@ void main(void)
 
 	bt_conn_cb_register(&conn_callbacks);
 
-	err = bt_le_scan_start(BT_LE_SCAN_ACTIVE, device_found);
+	err = scan_start();
 
 	if (err) {
 		printk("Scanning failed to start (err %d)\n", err);

@@ -1,30 +1,15 @@
----
 title: CC32XX I2C
-id: ti,cc32xx-i2c
 
-description: >
+description: |
     This binding gives a base representation of the TI CC32XX I2C controller
 
-inherits:
-    !include i2c.yaml
+compatible: "ti,cc32xx-i2c"
+
+include: i2c-controller.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "ti,cc32xx-i2c"
-
     reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+      required: true
 
     interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
-
-...
+      required: true

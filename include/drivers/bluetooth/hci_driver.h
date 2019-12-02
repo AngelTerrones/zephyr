@@ -7,8 +7,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef __BT_HCI_DRIVER_H
-#define __BT_HCI_DRIVER_H
+#ifndef ZEPHYR_INCLUDE_DRIVERS_BLUETOOTH_HCI_DRIVER_H_
+#define ZEPHYR_INCLUDE_DRIVERS_BLUETOOTH_HCI_DRIVER_H_
 
 /**
  * @brief HCI drivers
@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <net/buf.h>
 #include <bluetooth/buf.h>
+#include <device.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,8 +50,10 @@ static inline bool bt_hci_evt_is_prio(u8_t evt)
 	switch (evt) {
 	case BT_HCI_EVT_CMD_COMPLETE:
 	case BT_HCI_EVT_CMD_STATUS:
+		/* fallthrough */
 #if defined(CONFIG_BT_CONN)
 	case BT_HCI_EVT_NUM_COMPLETED_PACKETS:
+	case BT_HCI_EVT_DATA_BUF_OVERFLOW:
 #endif
 		return true;
 	default:
@@ -103,6 +106,7 @@ enum bt_hci_driver_bus {
 	BT_HCI_DRIVER_BUS_SDIO          = 6,
 	BT_HCI_DRIVER_BUS_SPI           = 7,
 	BT_HCI_DRIVER_BUS_I2C           = 8,
+	BT_HCI_DRIVER_BUS_IPM           = 9,
 };
 
 /**
@@ -167,6 +171,19 @@ struct bt_hci_driver {
  */
 int bt_hci_driver_register(const struct bt_hci_driver *drv);
 
+/**
+ * @brief Setup the HCI transport, which usually means to reset the
+ * Bluetooth IC.
+ *
+ * @note A weak version of this function is included in the H4 driver, so
+ *       defining it is optional per board.
+ *
+ * @param dev The device structure for the bus connecting to the IC
+ *
+ * @return 0 on success, negative error value on failure
+ */
+int bt_hci_transport_setup(struct device *dev);
+
 #ifdef __cplusplus
 }
 #endif
@@ -175,4 +192,4 @@ int bt_hci_driver_register(const struct bt_hci_driver *drv);
  * @}
  */
 
-#endif /* __BT_HCI_DRIVER_H */
+#endif /* ZEPHYR_INCLUDE_DRIVERS_BLUETOOTH_HCI_DRIVER_H_ */

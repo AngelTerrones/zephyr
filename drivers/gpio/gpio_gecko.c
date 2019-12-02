@@ -5,7 +5,7 @@
  */
 
 #include <errno.h>
-#include <gpio.h>
+#include <drivers/gpio.h>
 #include <soc.h>
 #include <em_gpio.h>
 
@@ -74,7 +74,7 @@ static int gpio_gecko_configure(struct device *dev,
 	GPIO_P_TypeDef *gpio_base = config->gpio_base;
 	GPIO_Port_TypeDef gpio_index = config->gpio_index;
 	GPIO_Mode_TypeDef mode;
-	unsigned int out = 0;
+	unsigned int out = 0U;
 
 	/* Check for an invalid pin configuration */
 	if ((flags & GPIO_INT) && (flags & GPIO_DIR_OUT)) {
@@ -94,7 +94,7 @@ static int gpio_gecko_configure(struct device *dev,
 	if ((flags & GPIO_DIR_MASK) == GPIO_DIR_IN) {
 		if ((flags & GPIO_PUD_MASK) == GPIO_PUD_PULL_UP) {
 			mode = gpioModeInputPull;
-			out = 1; /* pull-up*/
+			out = 1U; /* pull-up*/
 		} else if ((flags & GPIO_PUD_MASK) == GPIO_PUD_PULL_DOWN) {
 			mode = gpioModeInputPull;
 			/* out = 0 means pull-down*/
@@ -154,21 +154,13 @@ static int gpio_gecko_write(struct device *dev,
 			 * Writing zeros to the other bits leaves the data
 			 * output unchanged for the other pins.
 			 */
-#if defined(_GPIO_P_DOUTSET_MASK)
-			gpio_base->DOUTSET = BIT(pin);
-#else
-			BUS_RegBitWrite(&gpio_base->DOUT, pin, 1);
-#endif
+			GPIO_PinOutSet(config->gpio_index, pin);
 		} else {
 			/* Clear the data output for the corresponding pin.
 			 * Writing zeros to the other bits leaves the data
 			 * output unchanged for the other pins.
 			 */
-#if defined(_GPIO_P_DOUTCLR_MASK)
-			gpio_base->DOUTCLR = BIT(pin);
-#else
-			BUS_RegBitWrite(&gpio_base->DOUT, pin, 0);
-#endif
+			GPIO_PinOutClear(config->gpio_index, pin);
 		}
 	} else { /* GPIO_ACCESS_BY_PORT */
 		/* Write the data output for all the pins */
@@ -200,9 +192,7 @@ static int gpio_gecko_manage_callback(struct device *dev,
 {
 	struct gpio_gecko_data *data = dev->driver_data;
 
-	_gpio_manage_callback(&data->callbacks, callback, set);
-
-	return 0;
+	return gpio_manage_callback(&data->callbacks, callback, set);
 }
 
 static int gpio_gecko_enable_callback(struct device *dev,
@@ -254,7 +244,7 @@ static void gpio_gecko_common_isr(void *arg)
 		enabled_int = int_status & port_data->pin_callback_enables;
 		int_status &= ~enabled_int;
 
-		_gpio_fire_callbacks(&port_data->callbacks, port_dev,
+		gpio_fire_callbacks(&port_data->callbacks, port_dev,
 				     enabled_int);
 	}
 	/* Clear the pending interrupts */
@@ -285,7 +275,7 @@ static const struct gpio_gecko_common_config gpio_gecko_common_config = {
 
 static struct gpio_gecko_common_data gpio_gecko_common_data;
 
-DEVICE_AND_API_INIT(gpio_gecko_common, CONFIG_GPIO_GECKO_COMMON_NAME,
+DEVICE_AND_API_INIT(gpio_gecko_common, DT_GPIO_GECKO_COMMON_NAME,
 		    gpio_gecko_common_init,
 		    &gpio_gecko_common_data, &gpio_gecko_common_config,
 		    POST_KERNEL, CONFIG_GPIO_GECKO_COMMON_INIT_PRIORITY,
@@ -294,10 +284,10 @@ DEVICE_AND_API_INIT(gpio_gecko_common, CONFIG_GPIO_GECKO_COMMON_NAME,
 static int gpio_gecko_common_init(struct device *dev)
 {
 	gpio_gecko_common_data.count = 0;
-	IRQ_CONNECT(GPIO_EVEN_IRQn, CONFIG_GPIO_GECKO_COMMON_PRI,
+	IRQ_CONNECT(GPIO_EVEN_IRQn, DT_GPIO_GECKO_COMMON_EVEN_PRI,
 		    gpio_gecko_common_isr, DEVICE_GET(gpio_gecko_common), 0);
 
-	IRQ_CONNECT(GPIO_ODD_IRQn, CONFIG_GPIO_GECKO_COMMON_PRI,
+	IRQ_CONNECT(GPIO_ODD_IRQn, DT_GPIO_GECKO_COMMON_ODD_PRI,
 		    gpio_gecko_common_isr, DEVICE_GET(gpio_gecko_common), 0);
 
 	irq_enable(GPIO_EVEN_IRQn);
@@ -307,141 +297,69 @@ static int gpio_gecko_common_init(struct device *dev)
 }
 #endif /* CONFIG_GPIO_GECKO */
 
+#define GPIO_PORT_INIT(pl, pu) \
+static int gpio_gecko_port##pl##_init(struct device *dev); \
+\
+static const struct gpio_gecko_config gpio_gecko_port##pl##_config = { \
+	.gpio_base = &GPIO->P[gpioPort##pu], \
+	.gpio_index = gpioPort##pu, \
+}; \
+\
+static struct gpio_gecko_data gpio_gecko_port##pl##_data; \
+\
+DEVICE_AND_API_INIT(gpio_gecko_port##pl, DT_GPIO_GECKO_PORT##pu##_NAME, \
+		    gpio_gecko_port##pl##_init, \
+		    &gpio_gecko_port##pl##_data, \
+		    &gpio_gecko_port##pl##_config, \
+		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, \
+		    &gpio_gecko_driver_api); \
+\
+static int gpio_gecko_port##pl##_init(struct device *dev) \
+{ \
+	gpio_gecko_add_port(&gpio_gecko_common_data, dev); \
+	return 0; \
+}
 
 #ifdef CONFIG_GPIO_GECKO_PORTA
-static int gpio_gecko_porta_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_porta_config = {
-	.gpio_base = &GPIO->P[gpioPortA],
-	.gpio_index = gpioPortA,
-};
-
-static struct gpio_gecko_data gpio_gecko_porta_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_porta, CONFIG_GPIO_GECKO_PORTA_NAME,
-		    gpio_gecko_porta_init,
-		    &gpio_gecko_porta_data, &gpio_gecko_porta_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_porta_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(a, A)
 #endif /* CONFIG_GPIO_GECKO_PORTA */
 
 #ifdef CONFIG_GPIO_GECKO_PORTB
-static int gpio_gecko_portb_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_portb_config = {
-	.gpio_base = &GPIO->P[gpioPortB],
-	.gpio_index = gpioPortB,
-};
-
-static struct gpio_gecko_data gpio_gecko_portb_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_portb, CONFIG_GPIO_GECKO_PORTB_NAME,
-		    gpio_gecko_portb_init,
-		    &gpio_gecko_portb_data, &gpio_gecko_portb_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_portb_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(b, B)
 #endif /* CONFIG_GPIO_GECKO_PORTB */
 
 #ifdef CONFIG_GPIO_GECKO_PORTC
-static int gpio_gecko_portc_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_portc_config = {
-	.gpio_base = &GPIO->P[gpioPortC],
-	.gpio_index = gpioPortC,
-};
-
-static struct gpio_gecko_data gpio_gecko_portc_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_portc, CONFIG_GPIO_GECKO_PORTC_NAME,
-		    gpio_gecko_portc_init,
-		    &gpio_gecko_portc_data, &gpio_gecko_portc_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_portc_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(c, C)
 #endif /* CONFIG_GPIO_GECKO_PORTC */
 
 #ifdef CONFIG_GPIO_GECKO_PORTD
-static int gpio_gecko_portd_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_portd_config = {
-	.gpio_base = &GPIO->P[gpioPortD],
-	.gpio_index = gpioPortD,
-};
-
-static struct gpio_gecko_data gpio_gecko_portd_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_portd, CONFIG_GPIO_GECKO_PORTD_NAME,
-		    gpio_gecko_portd_init,
-		    &gpio_gecko_portd_data, &gpio_gecko_portd_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_portd_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(d, D)
 #endif /* CONFIG_GPIO_GECKO_PORTD */
 
 #ifdef CONFIG_GPIO_GECKO_PORTE
-static int gpio_gecko_porte_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_porte_config = {
-	.gpio_base = &GPIO->P[gpioPortE],
-	.gpio_index = gpioPortE,
-};
-
-static struct gpio_gecko_data gpio_gecko_porte_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_porte, CONFIG_GPIO_GECKO_PORTE_NAME,
-		    gpio_gecko_porte_init,
-		    &gpio_gecko_porte_data, &gpio_gecko_porte_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_porte_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(e, E)
 #endif /* CONFIG_GPIO_GECKO_PORTE */
 
 #ifdef CONFIG_GPIO_GECKO_PORTF
-static int gpio_gecko_portf_init(struct device *dev);
-
-static const struct gpio_gecko_config gpio_gecko_portf_config = {
-	.gpio_base = &GPIO->P[gpioPortF],
-	.gpio_index = gpioPortF,
-};
-
-static struct gpio_gecko_data gpio_gecko_portf_data;
-
-DEVICE_AND_API_INIT(gpio_gecko_portf, CONFIG_GPIO_GECKO_PORTF_NAME,
-		    gpio_gecko_portf_init,
-		    &gpio_gecko_portf_data, &gpio_gecko_portf_config,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-		    &gpio_gecko_driver_api);
-
-static int gpio_gecko_portf_init(struct device *dev)
-{
-	gpio_gecko_add_port(&gpio_gecko_common_data, dev);
-	return 0;
-}
+GPIO_PORT_INIT(f, F)
 #endif /* CONFIG_GPIO_GECKO_PORTF */
+
+#ifdef CONFIG_GPIO_GECKO_PORTG
+GPIO_PORT_INIT(g, G)
+#endif /* CONFIG_GPIO_GECKO_PORTG */
+
+#ifdef CONFIG_GPIO_GECKO_PORTH
+GPIO_PORT_INIT(h, H)
+#endif /* CONFIG_GPIO_GECKO_PORTH */
+
+#ifdef CONFIG_GPIO_GECKO_PORTI
+GPIO_PORT_INIT(i, I)
+#endif /* CONFIG_GPIO_GECKO_PORTI */
+
+#ifdef CONFIG_GPIO_GECKO_PORTJ
+GPIO_PORT_INIT(j, J)
+#endif /* CONFIG_GPIO_GECKO_PORTJ */
+
+#ifdef CONFIG_GPIO_GECKO_PORTK
+GPIO_PORT_INIT(k, K)
+#endif /* CONFIG_GPIO_GECKO_PORTK */

@@ -11,7 +11,7 @@
 
 #include "mbedtls/md.h"
 
-#ifndef __ZEPHYR__
+#if !defined(__ZEPHYR__) || defined(CONFIG_POSIX_API)
 
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -23,7 +23,6 @@
 
 #include <net/socket.h>
 #include <kernel.h>
-#include <net/net_app.h>
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
 #include <net/tls_credentials.h>
@@ -133,7 +132,7 @@ void download(struct addrinfo *ai, bool is_tls)
 {
 	int sock;
 
-	cur_bytes = 0;
+	cur_bytes = 0U;
 
 	if (is_tls) {
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
@@ -221,7 +220,7 @@ int main(void)
 	struct addrinfo *res;
 	int st;
 	char *p;
-	unsigned int total_bytes = 0;
+	unsigned int total_bytes = 0U;
 	int resolve_attempts = 10;
 	bool is_tls = false;
 

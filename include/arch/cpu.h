@@ -6,8 +6,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __ARCHCPU_H__
-#define __ARCHCPU_H__
+#ifndef ZEPHYR_INCLUDE_ARCH_CPU_H_
+#define ZEPHYR_INCLUDE_ARCH_CPU_H_
+
+#include <sys/arch_interface.h>
 
 #if defined(CONFIG_X86)
 #include <arch/x86/arch.h>
@@ -17,8 +19,8 @@
 #include <arch/arc/arch.h>
 #elif defined(CONFIG_NIOS2)
 #include <arch/nios2/arch.h>
-#elif defined(CONFIG_RISCV32)
-#include <arch/riscv32/arch.h>
+#elif defined(CONFIG_RISCV)
+#include <arch/riscv/arch.h>
 #elif defined(CONFIG_XTENSA)
 #include <arch/xtensa/arch.h>
 #elif defined(CONFIG_ARCH_POSIX)
@@ -27,4 +29,4 @@
 #error "Unknown Architecture"
 #endif
 
-#endif /* __ARCHCPU_H__ */
+#endif /* ZEPHYR_INCLUDE_ARCH_CPU_H_ */

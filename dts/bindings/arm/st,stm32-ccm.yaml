@@ -1,26 +1,13 @@
----
 # SPDX-License-Identifier: Apache-2.0
 title: STM32 CCM
-id: st,stm32-ccm
-version: 0.1
 
-description: >
+description: |
   This binding gives a base representation of the STM32 CCM (Core Coupled Memory)
 
+compatible: "st,stm32-ccm"
+
+include: base.yaml
+
 properties:
-  compatible:
-    type: string
-    category: required
-    constraint: "st,stm32-ccm"
-
-  reg:
-    type: int
-    description: mmio register space
-    generation: define
-    category: required
-
-base_label: CCM
-use-property-label: yes
-
-...
-
+    reg:
+      required: true

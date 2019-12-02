@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017 Linaro Limited
- * Copyright (c) 2018 Foundries.io
+ * Copyright (c) 2018-2019 Foundries.io
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -56,9 +56,12 @@
  * - Cleanup integer parsing
  */
 
-#define SYS_LOG_DOMAIN "lib/lwm2m_plain_text"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_LWM2M_LEVEL
-#include <logging/sys_log.h>
+#define LOG_MODULE_NAME net_lwm2m_plain_text
+#define LOG_LEVEL CONFIG_LWM2M_LOG_LEVEL
+
+#include <logging/log.h>
+LOG_MODULE_REGISTER(LOG_MODULE_NAME);
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,15 +89,12 @@ size_t plain_text_put_format(struct lwm2m_output_context *out,
 		return 0;
 	}
 
-	out->frag = net_pkt_write(out->out_cpkt->pkt, out->frag,
-				  out->offset, &out->offset,
-				  strlen(pt_buffer), pt_buffer,
-				  BUF_ALLOC_TIMEOUT);
-	if (!out->frag) {
+	n = strlen(pt_buffer);
+	if (buf_append(CPKT_BUF_WRITE(out->out_cpkt), pt_buffer, n) < 0) {
 		return 0;
 	}
 
-	return strlen(pt_buffer);
+	return (size_t)n;
 }
 
 static size_t put_s32(struct lwm2m_output_context *out,
@@ -121,32 +121,63 @@ static size_t put_s64(struct lwm2m_output_context *out,
 	return plain_text_put_format(out, "%lld", value);
 }
 
-static size_t put_float32fix(struct lwm2m_output_context *out,
-			     struct lwm2m_obj_path *path,
-			     float32_value_t *value)
+size_t plain_text_put_float32fix(struct lwm2m_output_context *out,
+				 struct lwm2m_obj_path *path,
+				 float32_value_t *value)
 {
-	return plain_text_put_format(out, "%d.%d",
-				     value->val1, value->val2);
+	size_t len;
+	char buf[sizeof("000000")];
+
+	/* value of 123 -> "000123" -- ignore sign */
+	len = snprintf(buf, sizeof(buf), "%06d", abs(value->val2));
+	if (len != 6U) {
+		strcpy(buf, "0");
+	} else {
+		/* clear ending zeroes, but leave 1 if needed */
+		while (len > 1U && buf[len - 1] == '0') {
+			buf[--len] = '\0';
+		}
+	}
+
+	return plain_text_put_format(out, "%s%d.%s",
+				     /* handle negative val2 when val1 is 0 */
+				     (value->val1 == 0 && value->val2 < 0) ?
+						"-" : "",
+				     value->val1, buf);
 }
 
-static size_t put_float64fix(struct lwm2m_output_context *out,
-			     struct lwm2m_obj_path *path,
-			     float64_value_t *value)
+size_t plain_text_put_float64fix(struct lwm2m_output_context *out,
+				 struct lwm2m_obj_path *path,
+				 float64_value_t *value)
 {
-	return plain_text_put_format(out, "%lld.%lld",
-				     value->val1, value->val2);
+	size_t len;
+	char buf[sizeof("000000000")];
+
+	/* value of 123 -> "000000123" -- ignore sign */
+	len = snprintf(buf, sizeof(buf), "%09lld",
+		       (long long int)abs(value->val2));
+	if (len != 9U) {
+		strcpy(buf, "0");
+	} else {
+		/* clear ending zeroes, but leave 1 if needed */
+		while (len > 1U && buf[len - 1] == '0') {
+			buf[--len] = '\0';
+		}
+	}
+
+	return plain_text_put_format(out, "%s%lld.%s",
+				     /* handle negative val2 when val1 is 0 */
+				     (value->val1 == 0 && value->val2 < 0) ?
+						"-" : "",
+				     value->val1, buf);
 }
 
 static size_t put_string(struct lwm2m_output_context *out,
 			 struct lwm2m_obj_path *path,
 			 char *buf, size_t buflen)
 {
-	out->frag = net_pkt_write(out->out_cpkt->pkt, out->frag,
-				  out->offset, &out->offset,
-				  buflen, buf,
-				  BUF_ALLOC_TIMEOUT);
-	if (!out->frag) {
-		return -ENOMEM;
+	if (buf_append(CPKT_BUF_WRITE(out->out_cpkt), buf, buflen) < 0) {
+		return 0;
 	}
 
 	return buflen;
@@ -163,17 +194,9 @@ static size_t put_bool(struct lwm2m_output_context *out,
 	}
 }
 
-static int pkt_length_left(struct lwm2m_input_context *in)
+static int get_length_left(struct lwm2m_input_context *in)
 {
-	struct net_buf *frag = in->frag;
-	int total_left = -in->offset;
-
-	while (frag) {
-		total_left += frag->len;
-		frag = frag->frags;
-	}
-
-	return total_left;
+	return in->in_cpkt->offset - in->offset;
 }
 
 static size_t plain_text_read_number(struct lwm2m_input_context *in,
@@ -188,15 +211,14 @@ static size_t plain_text_read_number(struct lwm2m_input_context *in,
 	u8_t tmp;
 
 	/* initialize values to 0 */
-	value1 = 0;
+	*value1 = 0;
 	if (value2) {
-		value2 = 0;
+		*value2 = 0;
 	}
 
-	while (in->frag && in->offset != 0xffff) {
-		in->frag = net_frag_read_u8(in->frag, in->offset, &in->offset,
-					    &tmp);
-		if (!in->frag && in->offset == 0xffff) {
+	while (in->offset < in->in_cpkt->offset) {
+		if (buf_read_u8(&tmp, CPKT_BUF_READ(in->in_cpkt),
+				&in->offset) < 0) {
 			break;
 		}
 
@@ -245,15 +267,15 @@ static size_t get_s64(struct lwm2m_input_context *in, s64_t *value)
 static size_t get_string(struct lwm2m_input_context *in,
 			 u8_t *value, size_t buflen)
 {
-	u16_t in_len = pkt_length_left(in);
+	u16_t in_len = get_length_left(in);
 
 	if (in_len > buflen) {
 		/* TODO: generate warning? */
 		in_len = buflen - 1;
 	}
-	in->frag = net_frag_read(in->frag, in->offset, &in->offset,
-				 in_len, value);
-	if (!in->frag && in->offset == 0xffff) {
+
+	if (buf_read(value, in_len, CPKT_BUF_READ(in->in_cpkt),
+		     &in->offset) < 0) {
 		value[0] = '\0';
 		return 0;
 	}
@@ -289,8 +311,7 @@ static size_t get_bool(struct lwm2m_input_context *in,
 {
 	u8_t tmp;
 
-	in->frag = net_frag_read_u8(in->frag, in->offset, &in->offset, &tmp);
-	if (!in->frag && in->offset == 0xffff) {
+	if (buf_read_u8(&tmp, CPKT_BUF_READ(in->in_cpkt), &in->offset) < 0) {
 		return 0;
 	}
 
@@ -305,7 +326,7 @@ static size_t get_bool(struct lwm2m_input_context *in,
 static size_t get_opaque(struct lwm2m_input_context *in,
 			 u8_t *value, size_t buflen, bool *last_block)
 {
-	in->opaque_len = pkt_length_left(in);
+	in->opaque_len = get_length_left(in);
 	return lwm2m_engine_get_opaque_more(in, value, buflen, last_block);
 }
 
@@ -315,8 +336,8 @@ const struct lwm2m_writer plain_text_writer = {
 	.put_s32 = put_s32,
 	.put_s64 = put_s64,
 	.put_string = put_string,
-	.put_float32fix = put_float32fix,
-	.put_float64fix = put_float64fix,
+	.put_float32fix = plain_text_put_float32fix,
+	.put_float64fix = plain_text_put_float64fix,
 	.put_bool = put_bool,
 };
 
@@ -330,34 +351,31 @@ const struct lwm2m_reader plain_text_reader = {
 	.get_opaque = get_opaque,
 };
 
-int do_read_op_plain_text(struct lwm2m_engine_obj *obj,
-			  struct lwm2m_engine_context *context,
-			  int content_format)
+int do_read_op_plain_text(struct lwm2m_message *msg, int content_format)
 {
 	/* Plain text can only return single resource */
-	if (context->path->level != 3) {
+	if (msg->path.level != 3U) {
 		return -EPERM; /* NOT_ALLOWED */
 	}
 
-	return lwm2m_perform_read_op(obj, context, content_format);
+	return lwm2m_perform_read_op(msg, content_format);
 }
 
-int do_write_op_plain_text(struct lwm2m_engine_obj *obj,
-			   struct lwm2m_engine_context *context)
+int do_write_op_plain_text(struct lwm2m_message *msg)
 {
-	struct lwm2m_obj_path *path = context->path;
 	struct lwm2m_engine_obj_inst *obj_inst = NULL;
 	struct lwm2m_engine_obj_field *obj_field;
-	struct lwm2m_engine_res_inst *res = NULL;
+	struct lwm2m_engine_res *res = NULL;
+	struct lwm2m_engine_res_inst *res_inst = NULL;
 	int ret, i;
-	u8_t created = 0;
+	u8_t created = 0U;
 
-	ret = lwm2m_get_or_create_engine_obj(context, &obj_inst, &created);
+	ret = lwm2m_get_or_create_engine_obj(msg, &obj_inst, &created);
 	if (ret < 0) {
 		return ret;
 	}
 
-	obj_field = lwm2m_get_engine_obj_field(obj, path->res_id);
+	obj_field = lwm2m_get_engine_obj_field(obj_inst->obj, msg->path.res_id);
 	if (!obj_field) {
 		return -ENOENT;
 	}
@@ -366,12 +384,12 @@ int do_write_op_plain_text(struct lwm2m_engine_obj *obj,
 		return -EPERM;
 	}
 
-	if (!obj_inst->resources || obj_inst->resource_count == 0) {
+	if (!obj_inst->resources || obj_inst->resource_count == 0U) {
 		return -EINVAL;
 	}
 
 	for (i = 0; i < obj_inst->resource_count; i++) {
-		if (obj_inst->resources[i].res_id == path->res_id) {
+		if (obj_inst->resources[i].res_id == msg->path.res_id) {
 			res = &obj_inst->resources[i];
 			break;
 		}
@@ -381,6 +399,21 @@ int do_write_op_plain_text(struct lwm2m_engine_obj *obj,
 		return -ENOENT;
 	}
 
-	context->path->level = 3;
-	return lwm2m_write_handler(obj_inst, res, obj_field, context);
+	for (i = 0; i < res->res_inst_count; i++) {
+		if (res->res_instances[i].res_inst_id ==
+		    msg->path.res_inst_id) {
+			res_inst = &res->res_instances[i];
+			break;
+		}
+	}
+
+	if (!res_inst) {
+		return -ENOENT;
+	}
+
+	if (msg->path.level < 3) {
+		msg->path.level = 3U;
+	}
+
+	return lwm2m_write_handler(obj_inst, res, res_inst, obj_field, msg);
 }

@@ -7,6 +7,10 @@ flash: 1024
 toolchain:
   - zephyr
   - gnuarmemb
+  - xtools
 supported:
+  - arduino_gpio
   - gpio
   - usb_device
+  - watchdog
+  - adc

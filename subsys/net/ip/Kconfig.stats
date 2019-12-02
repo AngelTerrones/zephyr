@@ -1,10 +1,7 @@
-# Kconfig.stats - Statistics Options
+# Statistics Options
 
-#
 # Copyright (c) 2016 Intel Corporation.
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig NET_STATISTICS
 	bool "Network statistics"
@@ -12,6 +9,12 @@ menuconfig NET_STATISTICS
 	  Manage statistics accounting. This takes memory so say 'n' if unsure.
 
 if NET_STATISTICS
+
+module = NET_STATISTICS
+module-dep = NET_LOG
+module-str = Log level for network statistics
+module-help = Enables statistics module to output debug messages.
+source "subsys/net/Kconfig.template.log_config.net"
 
 config NET_STATISTICS_PER_INTERFACE
 	bool "Collect statistics per network interface"
@@ -76,19 +79,19 @@ config NET_STATISTICS_TCP
 	help
 	  Keep track of TCP related statistics
 
-config NET_STATISTICS_RPL
-	bool "RPL statistics"
-	depends on NET_RPL
-	default y
-	help
-	  Keep track of RPL related statistics
-
 config NET_STATISTICS_MLD
 	bool "Multicast Listener Discovery (MLD) statistics"
 	depends on NET_IPV6_MLD
 	default y
 	help
 	  Keep track of MLD related statistics
+
+config NET_STATISTICS_PPP
+	bool "Point-to-point (PPP) statistics"
+	depends on NET_PPP
+	default y
+	help
+	  Keep track of PPP related statistics
 
 config NET_STATISTICS_ETHERNET
 	bool "Ethernet statistics"

@@ -14,13 +14,12 @@ Requirements
 ************
 
 The demo assumes that an LED is connected to one of GPIO lines. The
-sample code is configured to work on boards with user defined buttons and that
-have defined the LED0\_* variables in :file:`board.h`.
+sample code is configured to work on boards that have defined the led0
+alias in their board devicetree description file. Doing so will generate
+these variables:
 
-The :file:`board.h` must define the following variables:
-
-- LED0_GPIO_NAME (or LED0_GPIO_CONTROLLER)
-- LED0_GPIO_PIN
+- DT_ALIAS_LED0_GPIOS_CONTROLLER
+- DT_ALIAS_LED0_GPIOS_PIN
 
 
 Building and Running
@@ -31,7 +30,7 @@ flashed to a board as follows:
 
 .. zephyr-app-commands::
    :zephyr-app: samples/basic/blinky
-   :board: arduino_101
+   :board: reel_board
    :goals: build flash
    :compact:
 

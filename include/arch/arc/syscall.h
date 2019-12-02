@@ -13,8 +13,8 @@
  * (include/arch/syscall.h)
  */
 
-#ifndef _ARC_SYSCALL__H_
-#define _ARC_SYSCALL__H_
+#ifndef ZEPHYR_INCLUDE_ARCH_ARC_SYSCALL_H_
+#define ZEPHYR_INCLUDE_ARCH_ARC_SYSCALL_H_
 
 #define _TRAP_S_SCALL_IRQ_OFFLOAD		1
 #define _TRAP_S_CALL_RUNTIME_EXCEPT		2
@@ -24,6 +24,7 @@
 #ifndef _ASMLANGUAGE
 
 #include <zephyr/types.h>
+#include <stdbool.h>
 
 #ifdef CONFIG_CPU_ARCV2
 #include <arch/arc/v2/aux_regs.h>
@@ -37,9 +38,10 @@ extern "C" {
  * just for enabling CONFIG_USERSPACE on arc w/o errors.
  */
 
-static inline u32_t _arch_syscall_invoke6(u32_t arg1, u32_t arg2, u32_t arg3,
-					  u32_t arg4, u32_t arg5, u32_t arg6,
-					  u32_t call_id)
+static inline uintptr_t arch_syscall_invoke6(uintptr_t arg1, uintptr_t arg2,
+					     uintptr_t arg3, uintptr_t arg4,
+					     uintptr_t arg5, uintptr_t arg6,
+					     uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r1 __asm__("r1") = arg2;
@@ -61,8 +63,10 @@ static inline u32_t _arch_syscall_invoke6(u32_t arg1, u32_t arg2, u32_t arg3,
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke5(u32_t arg1, u32_t arg2, u32_t arg3,
-					  u32_t arg4, u32_t arg5, u32_t call_id)
+static inline uintptr_t arch_syscall_invoke5(uintptr_t arg1, uintptr_t arg2,
+					     uintptr_t arg3, uintptr_t arg4,
+					     uintptr_t arg5,
+					     uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r1 __asm__("r1") = arg2;
@@ -83,8 +87,9 @@ static inline u32_t _arch_syscall_invoke5(u32_t arg1, u32_t arg2, u32_t arg3,
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke4(u32_t arg1, u32_t arg2, u32_t arg3,
-					  u32_t arg4, u32_t call_id)
+static inline uintptr_t arch_syscall_invoke4(uintptr_t arg1, uintptr_t arg2,
+					     uintptr_t arg3, uintptr_t arg4,
+					     uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r1 __asm__("r1") = arg2;
@@ -104,8 +109,9 @@ static inline u32_t _arch_syscall_invoke4(u32_t arg1, u32_t arg2, u32_t arg3,
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke3(u32_t arg1, u32_t arg2, u32_t arg3,
-					  u32_t call_id)
+static inline uintptr_t arch_syscall_invoke3(uintptr_t arg1, uintptr_t arg2,
+					     uintptr_t arg3,
+					     uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r1 __asm__("r1") = arg2;
@@ -123,7 +129,8 @@ static inline u32_t _arch_syscall_invoke3(u32_t arg1, u32_t arg2, u32_t arg3,
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke2(u32_t arg1, u32_t arg2, u32_t call_id)
+static inline uintptr_t arch_syscall_invoke2(uintptr_t arg1, uintptr_t arg2,
+					     uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r1 __asm__("r1") = arg2;
@@ -140,7 +147,7 @@ static inline u32_t _arch_syscall_invoke2(u32_t arg1, u32_t arg2, u32_t call_id)
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke1(u32_t arg1, u32_t call_id)
+static inline uintptr_t arch_syscall_invoke1(uintptr_t arg1, uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0") = arg1;
 	register u32_t r6 __asm__("r6") = call_id;
@@ -156,7 +163,7 @@ static inline u32_t _arch_syscall_invoke1(u32_t arg1, u32_t call_id)
 	return ret;
 }
 
-static inline u32_t _arch_syscall_invoke0(u32_t call_id)
+static inline uintptr_t arch_syscall_invoke0(uintptr_t call_id)
 {
 	register u32_t ret __asm__("r0");
 	register u32_t r6 __asm__("r6") = call_id;
@@ -172,7 +179,7 @@ static inline u32_t _arch_syscall_invoke0(u32_t call_id)
 	return ret;
 }
 
-static inline int _arch_is_user_context(void)
+static inline bool arch_is_user_context(void)
 {
 	u32_t status;
 
@@ -182,7 +189,7 @@ static inline int _arch_is_user_context(void)
 			 : "=r"(status)
 			 : [status32] "i" (_ARC_V2_STATUS32));
 
-	return !(status & _ARC_V2_STATUS32_US);
+	return !(status & _ARC_V2_STATUS32_US) ? true : false;
 }
 
 #ifdef __cplusplus
@@ -191,4 +198,4 @@ static inline int _arch_is_user_context(void)
 
 #endif /* _ASMLANGUAGE */
 #endif /* CONFIG_USERSPACE */
-#endif /* _ARC_SYSCALL__H_ */
+#endif /* ZEPHYR_INCLUDE_ARCH_ARC_SYSCALL_H_ */

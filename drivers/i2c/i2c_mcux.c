@@ -5,11 +5,15 @@
  */
 
 #include <errno.h>
-#include <i2c.h>
+#include <drivers/i2c.h>
 #include <soc.h>
 #include <fsl_i2c.h>
 #include <fsl_clock.h>
-#include <misc/util.h>
+#include <sys/util.h>
+
+#include <logging/log.h>
+LOG_MODULE_REGISTER(i2c_mcux);
+
 #include "i2c-priv.h"
 
 #define DEV_CFG(dev) \
@@ -79,7 +83,7 @@ static void i2c_mcux_master_transfer_callback(I2C_Type *base,
 
 static u32_t i2c_mcux_convert_flags(int msg_flags)
 {
-	u32_t flags = 0;
+	u32_t flags = 0U;
 
 	if (!(msg_flags & I2C_MSG_STOP)) {
 		flags |= kI2C_TransferNoStopFlag;
@@ -102,6 +106,9 @@ static int i2c_mcux_transfer(struct device *dev, struct i2c_msg *msgs,
 
 	/* Iterate over all the messages */
 	for (int i = 0; i < num_msgs; i++) {
+		if (I2C_MSG_ADDR_10_BITS & msgs->flags) {
+			return -ENOTSUP;
+		}
 
 		/* Initialize the transfer descriptor */
 		transfer.flags = i2c_mcux_convert_flags(msgs->flags);
@@ -112,6 +119,13 @@ static int i2c_mcux_transfer(struct device *dev, struct i2c_msg *msgs,
 		transfer.subaddressSize = 0;
 		transfer.data = msgs->buf;
 		transfer.dataSize = msgs->len;
+
+		/* Prevent the controller to send a start condition between
+		 * messages, except if explicitly requested.
+		 */
+		if (i != 0 && !(msgs->flags & I2C_MSG_RESTART)) {
+			transfer.flags |= kI2C_TransferNoStartFlag;
+		}
 
 		/* Start the transfer */
 		status = I2C_MasterTransferNonBlocking(base,
@@ -167,7 +181,7 @@ static int i2c_mcux_init(struct device *dev)
 	I2C_MasterTransferCreateHandle(base, &data->handle,
 			i2c_mcux_master_transfer_callback, dev);
 
-	bitrate_cfg = _i2c_map_dt_bitrate(config->bitrate);
+	bitrate_cfg = i2c_map_dt_bitrate(config->bitrate);
 
 	error = i2c_mcux_configure(dev, I2C_MODE_MASTER | bitrate_cfg);
 	if (error) {
@@ -184,56 +198,45 @@ static const struct i2c_driver_api i2c_mcux_driver_api = {
 	.transfer = i2c_mcux_transfer,
 };
 
+#define I2C_DEVICE_INIT_MCUX(n)			\
+	static void i2c_mcux_config_func_ ## n(struct device *dev);	\
+									\
+	static const struct i2c_mcux_config i2c_mcux_config_ ## n = {	\
+		.base = (I2C_Type *)DT_I2C_MCUX_ ## n ## _BASE_ADDRESS,	\
+		.clock_source = I2C ## n ## _CLK_SRC,			\
+		.irq_config_func = i2c_mcux_config_func_ ## n,		\
+		.bitrate = DT_I2C_MCUX_ ## n ## _BITRATE,		\
+	};								\
+									\
+	static struct i2c_mcux_data i2c_mcux_data_ ## n;		\
+									\
+	DEVICE_AND_API_INIT(i2c_mcux_ ## n, DT_I2C_ ## n ## _NAME,	\
+			&i2c_mcux_init, &i2c_mcux_data_ ## n,		\
+			&i2c_mcux_config_ ## n, POST_KERNEL,		\
+			CONFIG_KERNEL_INIT_PRIORITY_DEVICE,		\
+			&i2c_mcux_driver_api);				\
+									\
+	static void i2c_mcux_config_func_ ## n(struct device *dev)	\
+	{								\
+		IRQ_CONNECT(DT_I2C_MCUX_ ## n ## _IRQ,			\
+			DT_I2C_MCUX_ ## n ## _IRQ_PRI, i2c_mcux_isr,	\
+			DEVICE_GET(i2c_mcux_ ## n), 0);			\
+									\
+		irq_enable(DT_I2C_MCUX_ ## n ## _IRQ);			\
+	}
+
 #ifdef CONFIG_I2C_0
-static void i2c_mcux_config_func_0(struct device *dev);
-
-static const struct i2c_mcux_config i2c_mcux_config_0 = {
-	.base = (I2C_Type *)CONFIG_I2C_MCUX_0_BASE_ADDRESS,
-	.clock_source = I2C0_CLK_SRC,
-	.irq_config_func = i2c_mcux_config_func_0,
-	.bitrate = CONFIG_I2C_MCUX_0_BITRATE,
-};
-
-static struct i2c_mcux_data i2c_mcux_data_0;
-
-DEVICE_AND_API_INIT(i2c_mcux_0, CONFIG_I2C_0_NAME, &i2c_mcux_init,
-		    &i2c_mcux_data_0, &i2c_mcux_config_0,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &i2c_mcux_driver_api);
-
-static void i2c_mcux_config_func_0(struct device *dev)
-{
-	ARG_UNUSED(dev);
-
-	IRQ_CONNECT(CONFIG_I2C_MCUX_0_IRQ, CONFIG_I2C_MCUX_0_IRQ_PRI,
-		    i2c_mcux_isr, DEVICE_GET(i2c_mcux_0), 0);
-
-	irq_enable(CONFIG_I2C_MCUX_0_IRQ);
-}
-#endif /* CONFIG_I2C_0 */
+	I2C_DEVICE_INIT_MCUX(0)
+#endif
 
 #ifdef CONFIG_I2C_1
-static void i2c_mcux_config_func_1(struct device *dev);
+	I2C_DEVICE_INIT_MCUX(1)
+#endif
 
-static const struct i2c_mcux_config i2c_mcux_config_1 = {
-	.base = (I2C_Type *)CONFIG_I2C_MCUX_1_BASE_ADDRESS,
-	.clock_source = I2C1_CLK_SRC,
-	.irq_config_func = i2c_mcux_config_func_1,
-	.bitrate = CONFIG_I2C_MCUX_1_BITRATE,
-};
+#ifdef CONFIG_I2C_2
+	I2C_DEVICE_INIT_MCUX(2)
+#endif
 
-static struct i2c_mcux_data i2c_mcux_data_1;
-
-DEVICE_AND_API_INIT(i2c_mcux_1, CONFIG_I2C_1_NAME, &i2c_mcux_init,
-		    &i2c_mcux_data_1, &i2c_mcux_config_1,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
-		    &i2c_mcux_driver_api);
-
-static void i2c_mcux_config_func_1(struct device *dev)
-{
-	IRQ_CONNECT(CONFIG_I2C_MCUX_1_IRQ, CONFIG_I2C_MCUX_1_IRQ_PRI,
-		    i2c_mcux_isr, DEVICE_GET(i2c_mcux_1), 0);
-
-	irq_enable(CONFIG_I2C_MCUX_1_IRQ);
-}
-#endif /* CONFIG_I2C_1 */
+#ifdef CONFIG_I2C_3
+	I2C_DEVICE_INIT_MCUX(3)
+#endif

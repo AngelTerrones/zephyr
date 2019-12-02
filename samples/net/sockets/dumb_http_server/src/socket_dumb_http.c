@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <errno.h>
 
-#ifndef __ZEPHYR__
+#if !defined(__ZEPHYR__) || defined(CONFIG_POSIX_API)
 
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -19,9 +19,8 @@
 
 #include <net/socket.h>
 #include <kernel.h>
-#include <net/net_app.h>
 
-#include <net/buf.h>
+#include <net/net_pkt.h>
 
 #endif
 
@@ -87,6 +86,10 @@ int main(void)
 			char c;
 
 			r = recv(client, &c, 1, 0);
+			if (r == 0) {
+				goto close_client;
+			}
+
 			if (r < 0) {
 				if (errno == EAGAIN || errno == EINTR) {
 					continue;

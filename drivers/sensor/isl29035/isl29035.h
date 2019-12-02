@@ -6,15 +6,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _SENSOR_ISL29035_H_
-#define _SENSOR_ISL29035_H_
+#ifndef ZEPHYR_DRIVERS_SENSOR_ISL29035_ISL29035_H_
+#define ZEPHYR_DRIVERS_SENSOR_ISL29035_ISL29035_H_
 
 #include <device.h>
 #include <kernel.h>
-#include <sensor.h>
-#include <gpio.h>
+#include <drivers/sensor.h>
+#include <drivers/gpio.h>
 
-#define ISL29035_I2C_ADDRESS		0x44
+#define ISL29035_I2C_ADDRESS		DT_INST_0_ISIL_ISL29035_BASE_ADDRESS
 
 #define ISL29035_COMMAND_I_REG		0x00
 #define ISL29035_OPMODE_SHIFT		5
@@ -146,7 +146,4 @@ int isl29035_trigger_set(struct device *dev,
 int isl29035_init_interrupt(struct device *dev);
 #endif
 
-#define SYS_LOG_DOMAIN "ISL29035"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_SENSOR_LEVEL
-#include <logging/sys_log.h>
-#endif /* _SENSOR_ISL29035_H_ */
+#endif /* ZEPHYR_DRIVERS_SENSOR_ISL29035_ISL29035_H_ */

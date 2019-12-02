@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <kernel_structs.h>
+#include <kernel.h>
 #include <cmsis_os.h>
+#include <string.h>
 
 /**
  * @brief Create and Initialize mail queue.
@@ -16,7 +17,7 @@ osMailQId osMailCreate(const osMailQDef_t *queue_def, osThreadId thread_id)
 		return NULL;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return NULL;
 	}
 
@@ -37,7 +38,7 @@ void *osMailAlloc(osMailQId queue_id, uint32_t millisec)
 		return NULL;
 	}
 
-	if (millisec == 0) {
+	if (millisec == 0U) {
 		retval = k_mem_slab_alloc(
 				(struct k_mem_slab *)(queue_def->pool),
 				(void **)&ptr, K_NO_WAIT);
@@ -71,7 +72,7 @@ void *osMailCAlloc(osMailQId queue_id, uint32_t millisec)
 		return NULL;
 	}
 
-	if (millisec == 0) {
+	if (millisec == 0U) {
 		retval = k_mem_slab_alloc(
 				(struct k_mem_slab *)(queue_def->pool),
 				(void **)&ptr, K_NO_WAIT);
@@ -86,7 +87,7 @@ void *osMailCAlloc(osMailQId queue_id, uint32_t millisec)
 	}
 
 	if (retval == 0) {
-		memset(ptr, 0, queue_def->item_sz);
+		(void)memset(ptr, 0, queue_def->item_sz);
 		return ptr;
 	} else {
 		return NULL;
@@ -105,16 +106,17 @@ osStatus osMailPut(osMailQId queue_id, void *mail)
 		return osErrorParameter;
 	}
 
-	memset(&mmsg, 0, sizeof(mmsg));
+	if (mail == NULL) {
+		return osErrorValue;
+	}
+
+	(void)memset(&mmsg, 0, sizeof(mmsg));
 	mmsg.tx_data = mail;
 	mmsg.rx_source_thread = K_ANY;
 	mmsg.tx_target_thread = K_ANY;
 
-	if (k_mbox_put(queue_def->mbox, &mmsg, 100) == 0) {
-		return osOK;
-	} else {
-		return osErrorValue;
-	}
+	k_mbox_async_put(queue_def->mbox, &mmsg, NULL);
+	return osOK;
 }
 
 /**
@@ -132,11 +134,11 @@ osEvent osMailGet(osMailQId queue_id, uint32_t millisec)
 		return evt;
 	}
 
-	memset(&mmsg, 0, sizeof(mmsg));
+	(void)memset(&mmsg, 0, sizeof(mmsg));
 	mmsg.rx_source_thread = K_ANY;
 	mmsg.tx_target_thread = K_ANY;
 
-	if (millisec == 0) {
+	if (millisec == 0U) {
 		retval = k_mbox_get(queue_def->mbox, &mmsg, NULL, K_NO_WAIT);
 	} else if (millisec == osWaitForever) {
 		retval = k_mbox_get(queue_def->mbox, &mmsg, NULL, K_FOREVER);

@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <kernel_structs.h>
+#include <kernel.h>
 #include <cmsis_os.h>
+#include <string.h>
 
 #define ACTIVE 1
 #define NOT_ACTIVE 0
@@ -47,8 +48,8 @@ osTimerId osTimerCreate(const osTimerDef_t *timer_def, os_timer_type type,
 		return NULL;
 	}
 
-	if (k_mem_slab_alloc(&cmsis_timer_slab, (void **)&timer, 100) == 0) {
-		memset(timer, 0, sizeof(struct timer_obj));
+	if (k_mem_slab_alloc(&cmsis_timer_slab, (void **)&timer, K_MSEC(100)) == 0) {
+		(void)memset(timer, 0, sizeof(struct timer_obj));
 	} else {
 		return NULL;
 	}
@@ -74,14 +75,14 @@ osStatus osTimerStart(osTimerId timer_id, uint32_t millisec)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 
 	if (timer->type == osTimerOnce) {
-		k_timer_start(&timer->ztimer, millisec, 0);
+		k_timer_start(&timer->ztimer, millisec, K_NO_WAIT);
 	} else if (timer->type == osTimerPeriodic) {
-		k_timer_start(&timer->ztimer, 0, millisec);
+		k_timer_start(&timer->ztimer, K_NO_WAIT, millisec);
 	}
 
 	timer->status = ACTIVE;
@@ -99,7 +100,7 @@ osStatus osTimerStop(osTimerId timer_id)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 
@@ -123,7 +124,7 @@ osStatus osTimerDelete(osTimerId timer_id)
 		return osErrorParameter;
 	}
 
-	if (_is_in_isr()) {
+	if (k_is_in_isr()) {
 		return osErrorISR;
 	}
 

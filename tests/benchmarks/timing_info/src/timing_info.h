@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <timestamp.h>
-
+#include <kernel_internal.h>
 
 #define CALCULATE_TIME(special_char, profile, name)			     \
 	{								     \
@@ -46,7 +46,7 @@
 
 #elif CONFIG_X86
 #define TIMING_INFO_PRE_READ()
-#define TIMING_INFO_OS_GET_TIME()      (_tsc_read())
+#define TIMING_INFO_OS_GET_TIME()      (z_tsc_read())
 #define TIMING_INFO_GET_TIMER_VALUE()  (TIMING_INFO_OS_GET_TIME())
 #define SUBTRACT_CLOCK_CYCLES(val)     (val)
 
@@ -59,14 +59,8 @@
 #elif CONFIG_ARC
 #define TIMING_INFO_PRE_READ()
 #define TIMING_INFO_OS_GET_TIME()     (k_cycle_get_32())
-#define TIMING_INFO_GET_TIMER_VALUE() (_arc_v2_aux_reg_read(_ARC_V2_TMR0_COUNT))
+#define TIMING_INFO_GET_TIMER_VALUE() (z_arc_v2_aux_reg_read(_ARC_V2_TMR0_COUNT))
 #define SUBTRACT_CLOCK_CYCLES(val)    ((u32_t)val)
-
-#elif CONFIG_XTENSA
-#define TIMING_INFO_PRE_READ()
-#define TIMING_INFO_OS_GET_TIME()      (k_cycle_get_32())
-#define TIMING_INFO_GET_TIMER_VALUE()  (k_cycle_get_32())
-#define SUBTRACT_CLOCK_CYCLES(val)     ((u32_t)val)
 
 #elif CONFIG_NIOS2
 #include "altera_avalon_timer_regs.h"
@@ -87,14 +81,12 @@
 	  (IORD_ALTERA_AVALON_TIMER_PERIODL(TIMER_0_BASE)))	\
 	 - ((u32_t)val))
 
-
-#elif CONFIG_RISCV32
+#else
 #define TIMING_INFO_PRE_READ()
 #define TIMING_INFO_OS_GET_TIME()      (k_cycle_get_32())
 #define TIMING_INFO_GET_TIMER_VALUE()  (k_cycle_get_32())
 #define SUBTRACT_CLOCK_CYCLES(val)     ((u32_t)val)
-
-#endif	/* CONFIG_NRF_RTC_TIMER */
+#endif
 
 /******************************************************************************/
 /* NRF RTC TIMER runs ar very slow rate (32KHz), So in order to measure
@@ -141,12 +133,12 @@ static inline void benchmark_timer_init(void)  {       }
 static inline void benchmark_timer_stop(void)  {       }
 static inline void benchmark_timer_start(void) {       }
 
-#define CYCLES_TO_NS(x) SYS_CLOCK_HW_CYCLES_TO_NS(x)
+#define CYCLES_TO_NS(x) (u32_t)k_cyc_to_ns_floor64(x)
 
 /* Get Core Frequency in MHz */
 static inline u32_t get_core_freq_MHz(void)
 {
-	return  (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC/1000000);
+	return  (sys_clock_hw_cycles_per_sec() / 1000000);
 }
 
 #define PRINT_STATS(x, y, z)   PRINT_F(x, y, z)
@@ -174,7 +166,7 @@ static inline u32_t get_core_freq_MHz(void)
 /* Enable this macro to print all the measurements.
  * Note: Some measurements in few architectures are not valid
  */
-/* #define PRINT_ALL_MEASUREMENTS */
+#define PRINT_ALL_MEASUREMENTS
 #ifndef PRINT_ALL_MEASUREMENTS
 /*If the measured cycles is greater than 10000 then one of the following is
  * possible.
@@ -209,15 +201,6 @@ void mutex_bench(void);
 void msg_passing_bench(void);
 void userspace_bench(void);
 
-/******************************************************************************/
-/* External variables */
-extern u64_t __start_swap_time;
-extern u64_t __end_swap_time;
-extern u64_t __start_intr_time;
-extern u64_t __end_intr_time;
-extern u64_t __start_tick_time;
-extern u64_t __end_tick_time;
-/******************************************************************************/
 #ifdef CONFIG_USERSPACE
 #include <syscall_handler.h>
 __syscall int k_dummy_syscall(void);

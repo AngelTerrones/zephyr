@@ -132,7 +132,7 @@ static inline void *net_nbr_extra_data(struct net_nbr *nbr)
  * is released and returned to free list.
  * @param nbr Pointer to neighbor
  */
-#if defined(CONFIG_NET_DEBUG_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE_LOG_LEVEL_DBG)
 void net_nbr_unref_debug(struct net_nbr *nbr, const char *caller, int line);
 #define net_nbr_unref(nbr) net_nbr_unref_debug(nbr, __func__, __LINE__)
 #else
@@ -144,7 +144,7 @@ void net_nbr_unref(struct net_nbr *nbr);
  * @param nbr Pointer to neighbor
  * @return Pointer to neighbor
  */
-#if defined(CONFIG_NET_DEBUG_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE_LOG_LEVEL_DBG)
 struct net_nbr *net_nbr_ref_debug(struct net_nbr *nbr, const char *caller,
 				  int line);
 #define net_nbr_ref(nbr) net_nbr_ref_debug(nbr, __func__, __LINE__)
@@ -193,7 +193,16 @@ int net_nbr_unlink(struct net_nbr *nbr, struct net_linkaddr *lladdr);
  * @param idx Link layer address index in ll table.
  * @return Pointer to link layer address storage, NULL if not found
  */
+#if defined(CONFIG_NET_NATIVE)
 struct net_linkaddr_storage *net_nbr_get_lladdr(u8_t idx);
+#else
+static inline struct net_linkaddr_storage *net_nbr_get_lladdr(u8_t idx)
+{
+	ARG_UNUSED(idx);
+
+	return NULL;
+}
+#endif
 
 /**
  * @brief Clear table from all neighbors. After this the linking between
@@ -202,15 +211,11 @@ struct net_linkaddr_storage *net_nbr_get_lladdr(u8_t idx);
  */
 void net_nbr_clear_table(struct net_nbr_table *table);
 
-#if defined(CONFIG_NET_DEBUG_IPV6_NBR_CACHE)
 /**
  * @brief Debug helper to print out the neighbor information.
  * @param table Neighbor table
  */
 void net_nbr_print(struct net_nbr_table *table);
-#else
-#define net_nbr_print(...)
-#endif /* CONFIG_NET_DEBUG_IPV6_NBR_CACHE */
 
 #ifdef __cplusplus
 }

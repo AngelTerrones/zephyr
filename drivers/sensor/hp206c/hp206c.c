@@ -9,13 +9,16 @@
  */
 
 #include <init.h>
-#include <sensor.h>
-#include <i2c.h>
-#include <misc/byteorder.h>
+#include <drivers/sensor.h>
+#include <drivers/i2c.h>
+#include <sys/byteorder.h>
 #include <kernel.h>
-#include <gpio.h>
+#include <drivers/gpio.h>
+#include <logging/log.h>
 
 #include "hp206c.h"
+
+LOG_MODULE_REGISTER(HP206C, CONFIG_SENSOR_LOG_LEVEL);
 
 static inline int hp206c_bus_config(struct device *dev)
 {
@@ -105,11 +108,10 @@ static int hp206c_osr_set(struct device *dev, u16_t osr)
 	u8_t i;
 
 	/* the following code translates OSR values to an index */
-	for (i = 0; i < 6 && BIT(12 - i) != osr; i++) {
-		;
+	for (i = 0U; i < 6 && BIT(12 - i) != osr; i++) {
 	}
 
-	if (i == 6) {
+	if (i == 6U) {
 		return -ENOTSUP;
 	}
 
@@ -164,7 +166,7 @@ static int hp206c_wait_dev_ready(struct device *dev, u32_t timeout_ms)
 	struct hp206c_device_data *hp206c = dev->driver_data;
 	u8_t int_src;
 
-	k_timer_start(&hp206c->tmr, timeout_ms, 0);
+	k_timer_start(&hp206c->tmr, timeout_ms, K_NO_WAIT);
 	k_timer_status_sync(&hp206c->tmr);
 
 	if (hp206c_read_reg(dev, HP206C_REG_INT_SRC, &int_src) < 0) {
@@ -178,7 +180,7 @@ static int hp206c_wait_dev_ready(struct device *dev, u32_t timeout_ms)
 	return -EBUSY;
 }
 
-static int hp206c_adc_aquire(struct device *dev, enum sensor_channel chan)
+static int hp206c_adc_acquire(struct device *dev, enum sensor_channel chan)
 {
 	struct hp206c_device_data *hp206c = dev->driver_data;
 
@@ -274,7 +276,7 @@ static int hp206c_channel_get(struct device *dev,
 
 static const struct sensor_driver_api hp206c_api = {
 	.attr_set = hp206c_attr_set,
-	.sample_fetch = hp206c_adc_aquire,
+	.sample_fetch = hp206c_adc_acquire,
 	.channel_get = hp206c_channel_get,
 };
 
@@ -282,15 +284,15 @@ static int hp206c_init(struct device *dev)
 {
 	struct hp206c_device_data *hp206c = dev->driver_data;
 
-	hp206c->i2c = device_get_binding(CONFIG_HP206C_I2C_PORT_NAME);
+	hp206c->i2c = device_get_binding(DT_INST_0_HOPERF_HP206C_BUS_NAME);
 	if (!hp206c->i2c) {
-		SYS_LOG_ERR("I2C master controller not found!");
+		LOG_ERR("I2C master controller not found!");
 		return -EINVAL;
 	}
 
 	/* reset the chip */
 	if (hp206c_cmd_send(dev, HP206C_CMD_SOFT_RST) < 0) {
-		SYS_LOG_ERR("Cannot reset chip.");
+		LOG_ERR("Cannot reset chip.");
 		return -EIO;
 	}
 
@@ -299,7 +301,7 @@ static int hp206c_init(struct device *dev)
 	k_busy_wait(500);
 
 	if (hp206c_osr_set(dev, HP206C_DEFAULT_OSR) < 0) {
-		SYS_LOG_ERR("OSR value is not supported.");
+		LOG_ERR("OSR value is not supported.");
 		return -ENOTSUP;
 	}
 
@@ -312,6 +314,7 @@ static int hp206c_init(struct device *dev)
 
 static struct hp206c_device_data hp206c_data;
 
-DEVICE_AND_API_INIT(hp206c, CONFIG_HP206C_DRV_NAME, hp206c_init, &hp206c_data,
+DEVICE_AND_API_INIT(hp206c, DT_INST_0_HOPERF_HP206C_LABEL,
+		    hp206c_init, &hp206c_data,
 		    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,
 		    &hp206c_api);

@@ -9,13 +9,16 @@
 #include <errno.h>
 
 #include <kernel.h>
-#include <i2c.h>
-#include <sensor.h>
+#include <drivers/i2c.h>
+#include <drivers/sensor.h>
 #include <init.h>
-#include <gpio.h>
-#include <misc/__assert.h>
+#include <drivers/gpio.h>
+#include <sys/__assert.h>
+#include <logging/log.h>
 
 #include "sx9500.h"
+
+LOG_MODULE_REGISTER(SX9500, CONFIG_SENSOR_LOG_LEVEL);
 
 static u8_t sx9500_reg_defaults[] = {
 	/*
@@ -30,7 +33,7 @@ static u8_t sx9500_reg_defaults[] = {
 	0x40,	/* Doze enabled, 2x scan period doze, no raw filter. */
 	0x30,	/* Average threshold. */
 	0x0f,	/* Debouncer off, lowest average negative filter,
-		 * highest average postive filter.
+		 * highest average positive filter.
 		 */
 	0x0e,	/* Proximity detection threshold: 280 */
 	0x00,	/* No automatic compensation, compensate each pin
@@ -107,22 +110,22 @@ int sx9500_init(struct device *dev)
 {
 	struct sx9500_data *data = dev->driver_data;
 
-	data->i2c_master = device_get_binding(CONFIG_SX9500_I2C_DEV_NAME);
+	data->i2c_master = device_get_binding(DT_INST_0_SEMTECH_SX9500_BUS_NAME);
 	if (!data->i2c_master) {
-		SYS_LOG_DBG("sx9500: i2c master not found: %s",
-		    CONFIG_SX9500_I2C_DEV_NAME);
+		LOG_DBG("sx9500: i2c master not found: %s",
+		    DT_INST_0_SEMTECH_SX9500_BUS_NAME);
 		return -EINVAL;
 	}
 
-	data->i2c_slave_addr = CONFIG_SX9500_I2C_ADDR;
+	data->i2c_slave_addr = DT_INST_0_SEMTECH_SX9500_BASE_ADDRESS;
 
 	if (sx9500_init_chip(dev) < 0) {
-		SYS_LOG_DBG("sx9500: failed to initialize chip");
+		LOG_DBG("sx9500: failed to initialize chip");
 		return -EINVAL;
 	}
 
 	if (sx9500_setup_interrupt(dev) < 0) {
-		SYS_LOG_DBG("sx9500: failed to setup interrupt");
+		LOG_DBG("sx9500: failed to setup interrupt");
 		return -EINVAL;
 	}
 
@@ -131,6 +134,6 @@ int sx9500_init(struct device *dev)
 
 struct sx9500_data sx9500_data;
 
-DEVICE_AND_API_INIT(sx9500, CONFIG_SX9500_DEV_NAME, sx9500_init, &sx9500_data,
+DEVICE_AND_API_INIT(sx9500, DT_INST_0_SEMTECH_SX9500_LABEL, sx9500_init, &sx9500_data,
 		    NULL, POST_KERNEL, CONFIG_SENSOR_INIT_PRIORITY,
 		    &sx9500_api_funcs);

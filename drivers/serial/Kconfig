@@ -1,10 +1,7 @@
-# Kconfig - serial driver configuration options
+# Serial driver configuration options
 
-#
 # Copyright (c) 2014-2015 Wind River Systems, Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig SERIAL
   bool "Serial Drivers"
@@ -22,11 +19,23 @@ config SERIAL_HAS_DRIVER
     to signal that there is a serial driver. This is being used
     by other drivers which are dependent on serial.
 
+config SERIAL_SUPPORT_ASYNC
+	bool
+	help
+	  This is an option to be enabled by individual serial driver
+	  to signal that the driver and hardware supports async operation.
+
 config SERIAL_SUPPORT_INTERRUPT
   bool
   help
     This is an option to be enabled by individual serial driver
     to signal that the driver and hardware supports interrupts.
+
+config UART_ASYNC_API
+	bool "Enable new asynchronous UART API [EXPERIMENTAL]"
+	depends on SERIAL_SUPPORT_ASYNC
+	help
+	  This option enables new asynchronous UART API.
 
 config UART_INTERRUPT_DRIVEN
   bool "Enable UART Interrupt support"
@@ -71,13 +80,13 @@ source "drivers/serial/Kconfig.imx"
 
 source "drivers/serial/Kconfig.stellaris"
 
+source "drivers/serial/Kconfig.native_posix"
+
 source "drivers/serial/Kconfig.nsim"
 
 source "drivers/serial/Kconfig.usart_sam"
 
 source "drivers/serial/Kconfig.uart_sam"
-
-source "drivers/serial/Kconfig.qmsi"
 
 source "drivers/serial/Kconfig.stm32"
 
@@ -85,11 +94,11 @@ source "drivers/serial/Kconfig.nrfx"
 
 source "drivers/serial/Kconfig.altera_jtag"
 
+source "drivers/serial/Kconfig.cc13xx_cc26xx"
+
 source "drivers/serial/Kconfig.cc32xx"
 
 source "drivers/serial/Kconfig.cmsdk_apb"
-
-source "drivers/serial/Kconfig.riscv_qemu"
 
 source "drivers/serial/Kconfig.sifive"
 
@@ -97,10 +106,23 @@ source "drivers/serial/Kconfig.esp32"
 
 source "drivers/serial/Kconfig.gecko"
 
+source "drivers/serial/Kconfig.leuart_gecko"
+
 source "drivers/serial/Kconfig.msp432p4xx"
 
 source "drivers/serial/Kconfig.sam0"
 
-source "drivers/serial/Kconfig.algol"
+source "drivers/serial/Kconfig.psoc6"
 
-endif
+source "drivers/serial/Kconfig.pl011"
+
+source "drivers/serial/Kconfig.rv32m1_lpuart"
+
+source "drivers/serial/Kconfig.litex"
+
+source "drivers/serial/Kconfig.rtt"
+
+source "drivers/serial/Kconfig.xlnx"
+
+source "drivers/serial/Kconfig.algol"
+endif # SERIAL

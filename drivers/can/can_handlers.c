@@ -5,47 +5,91 @@
  */
 
 #include <syscall_handler.h>
-#include <can.h>
+#include <drivers/can.h>
 
-_SYSCALL_HANDLER(can_configure, dev, mode, bitrate) {
+static inline int z_vrfy_can_configure(struct device *dev, enum can_mode mode,
+				       u32_t bitrate)
+{
 
-	_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN);
+	Z_OOPS(Z_SYSCALL_DRIVER_CAN(dev, configure));
 
-	return _impl_can_configure((struct device *)dev, mode, bitrate);
+	return z_impl_can_configure((struct device *)dev, (enum can_mode)mode,
+				   (u32_t)bitrate);
 }
+#include <syscalls/can_configure_mrsh.c>
 
-_SYSCALL_HANDLER(can_send, dev, msg) {
-	_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN);
+static inline int z_vrfy_can_send(struct device *dev,
+				  const struct zcan_frame *msg,
+				  s32_t timeout,
+				  can_tx_callback_t callback_isr,
+				  void *callback_arg)
+{
+	Z_OOPS(Z_SYSCALL_DRIVER_CAN(dev, send));
 
-	/* We need to be able to read the data */
-	_SYSCALL_MEMORY_ARRAY_READ(msg->data, msg->dlc, sizeof(msg->data));
+	Z_OOPS(Z_SYSCALL_MEMORY_READ((const struct zcan_frame *)msg,
+				      sizeof(struct zcan_frame)));
+	Z_OOPS(Z_SYSCALL_MEMORY_READ(((struct zcan_frame *)msg)->data,
+				     sizeof((struct zcan_frame *)msg)->data));
+	Z_OOPS(Z_SYSCALL_VERIFY_MSG(callback_isr == 0,
+				    "callbacks may not be set from user mode"));
 
-	return _impl_can_send((struct device *)dev, (struct can_msg *)msg)
+	Z_OOPS(Z_SYSCALL_MEMORY_READ((void *)callback_arg, sizeof(void *)));
+
+	return z_impl_can_send((struct device *)dev,
+			      (const struct zcan_frame *)msg,
+			      (s32_t)timeout, (can_tx_callback_t) callback_isr,
+			      (void *)callback_arg);
 }
+#include <syscalls/can_send_mrsh.c>
 
-_SYSCALL_HANDLER(can_attach_msgq, dev, msgq, filter) {
-	_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN);
+static inline int z_vrfy_can_attach_msgq(struct device *dev,
+					 struct k_msgq *msgq,
+					 const struct zcan_filter *filter)
+{
+	Z_OOPS(Z_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN));
 
-	/* We need to be able to write the data */
-	_SYSCALL_MEMORY_WRITE(msgq, sizeof(msgq));
-	_SYSCALL_MEMORY_WRITE(msgq->buffer_start,
-			      msgq->buffer_end - msgq->buffer_start);
+	Z_OOPS(Z_SYSCALL_MEMORY_READ((struct zcan_filter *)filter,
+				     sizeof(struct zcan_filter)));
+	Z_OOPS(Z_SYSCALL_OBJ(msgq, K_OBJ_MSGQ));
 
-	return _impl_can_attach_msgq((struct device *)dev,
+	return z_impl_can_attach_msgq((struct device *)dev,
 				     (struct k_msgq *)msgq,
-				     (const struct can_filter *) filter);
+				     (const struct zcan_filter *) filter);
 }
+#include <syscalls/can_attach_msgq_mrsh.c>
 
-_SYSCALL_HANDLER(can_attach_isr, dev, isr, filter) {
-	_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN);
+static inline void z_vrfy_can_detach(struct device *dev, int filter_id)
+{
 
-	return _impl_can_attach_isr((struct device *)dev,
-				    (can_rx_callback_t)isr,
-				    (const struct can_filter *) filter);
+	Z_OOPS(Z_SYSCALL_DRIVER_CAN(dev, detach));
+
+	z_impl_can_detach((struct device *)dev, (int)filter_id);
 }
+#include <syscalls/can_detach_mrsh.c>
 
-_SYSCALL_HANDLER(can_detach, dev, filter_id) {
-	_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN);
+static inline
+enum can_state z_vrfy_can_get_state(struct device *dev,
+				    struct can_bus_err_cnt *err_cnt)
+{
 
-	return _impl_can_detach((struct device *)dev, (int)filter_id);
+	Z_OOPS(Z_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN));
+
+	if (err_cnt) {
+		Z_OOPS(Z_SYSCALL_MEMORY_WRITE(err_cnt, sizeof(err_cnt)));
+	}
+
+	return z_impl_can_get_state(dev, err_cnt);
 }
+#include <syscalls/can_get_state_mrsh.c>
+
+
+#ifndef CONFIG_CAN_AUTO_BUS_OFF_RECOVERY
+static inline int z_vrfy_can_recover(struct device *dev, s32_t timeout)
+{
+
+	Z_OOPS(Z_SYSCALL_OBJ(dev, K_OBJ_DRIVER_CAN));
+
+	return z_impl_can_recover(dev, s32_t timeout);
+}
+#include <syscalls/can_recover_mrsh.c>
+#endif /* CONFIG_CAN_AUTO_BUS_OFF_RECOVERY */

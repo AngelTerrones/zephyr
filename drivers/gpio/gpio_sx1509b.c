@@ -9,10 +9,10 @@
 #include <kernel.h>
 #include <device.h>
 #include <init.h>
-#include <gpio.h>
-#include <i2c.h>
-#include <misc/byteorder.h>
-#include <misc/util.h>
+#include <drivers/gpio.h>
+#include <drivers/i2c.h>
+#include <sys/byteorder.h>
+#include <sys/util.h>
 
 /** Cache of the output configuration and data of the pins */
 struct gpio_sx1509b_pin_state {
@@ -186,26 +186,30 @@ static int gpio_sx1509b_config(struct device *dev, int access_op, u32_t pin,
 
 	ret = i2c_reg_write_word_be(drv_data->i2c_master, cfg->i2c_slave_addr,
 				    SX1509B_REG_DIR, pins->dir);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	ret = i2c_reg_write_word_be(drv_data->i2c_master, cfg->i2c_slave_addr,
 				    SX1509B_REG_INPUT_DISABLE,
 				    pins->input_disable);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	ret = i2c_reg_write_word_be(drv_data->i2c_master, cfg->i2c_slave_addr,
 				    SX1509B_REG_PULL_UP,
 				    pins->pull_up);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	ret = i2c_reg_write_word_be(drv_data->i2c_master, cfg->i2c_slave_addr,
 				    SX1509B_REG_PULL_DOWN,
 				    pins->pull_down);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	ret = i2c_reg_write_word_be(drv_data->i2c_master, cfg->i2c_slave_addr,
 				    SX1509B_REG_OPEN_DRAIN,
@@ -282,8 +286,9 @@ static int gpio_sx1509b_read(struct device *dev, int access_op, u32_t pin,
 	ret = i2c_burst_read(drv_data->i2c_master, cfg->i2c_slave_addr,
 			     SX1509B_REG_DATA, (u8_t *)&pin_data,
 			     sizeof(pin_data));
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	pin_data = sys_be16_to_cpu(pin_data);
 
@@ -333,18 +338,22 @@ static int gpio_sx1509b_init(struct device *dev)
 
 	ret = i2c_reg_write_byte(drv_data->i2c_master, cfg->i2c_slave_addr,
 				 SX1509B_REG_RESET, SX1509B_REG_RESET_MAGIC0);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
+
 	ret = i2c_reg_write_byte(drv_data->i2c_master, cfg->i2c_slave_addr,
 				 SX1509B_REG_RESET, SX1509B_REG_RESET_MAGIC1);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 	ret = i2c_reg_write_byte(drv_data->i2c_master, cfg->i2c_slave_addr,
 				 SX1509B_REG_CLOCK,
 				 SX1509B_REG_CLOCK_FOSC_INT_2MHZ);
-	if (ret)
+	if (ret) {
 		goto out;
+	}
 
 out:
 	k_sem_give(&drv_data->lock);
@@ -352,12 +361,12 @@ out:
 }
 
 static const struct gpio_sx1509b_config gpio_sx1509b_cfg = {
-	.i2c_master_dev_name = CONFIG_GPIO_SX1509B_I2C_MASTER_DEV_NAME,
-	.i2c_slave_addr	= CONFIG_GPIO_SX1509B_I2C_ADDR,
+	.i2c_master_dev_name = DT_INST_0_SEMTECH_SX1509B_BUS_NAME,
+	.i2c_slave_addr	= DT_INST_0_SEMTECH_SX1509B_BASE_ADDRESS,
 };
 
 static struct gpio_sx1509b_drv_data gpio_sx1509b_drvdata = {
-	.lock = _K_SEM_INITIALIZER(gpio_sx1509b_drvdata.lock, 1, 1),
+	.lock = Z_SEM_INITIALIZER(gpio_sx1509b_drvdata.lock, 1, 1),
 };
 
 static const struct gpio_driver_api gpio_sx1509b_drv_api_funcs = {
@@ -366,7 +375,7 @@ static const struct gpio_driver_api gpio_sx1509b_drv_api_funcs = {
 	.read	= gpio_sx1509b_read,
 };
 
-DEVICE_AND_API_INIT(gpio_sx1509b, CONFIG_GPIO_SX1509B_DEV_NAME,
+DEVICE_AND_API_INIT(gpio_sx1509b, DT_INST_0_SEMTECH_SX1509B_LABEL,
 		    gpio_sx1509b_init, &gpio_sx1509b_drvdata, &gpio_sx1509b_cfg,
 		    POST_KERNEL, CONFIG_GPIO_SX1509B_INIT_PRIORITY,
 		    &gpio_sx1509b_drv_api_funcs);

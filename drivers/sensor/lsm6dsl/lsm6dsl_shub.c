@@ -5,13 +5,16 @@
  */
 
 #include <device.h>
-#include <i2c.h>
-#include <misc/__assert.h>
-#include <misc/util.h>
+#include <drivers/i2c.h>
+#include <sys/__assert.h>
+#include <sys/util.h>
 #include <kernel.h>
-#include <sensor.h>
+#include <drivers/sensor.h>
+#include <logging/log.h>
 
 #include "lsm6dsl.h"
+
+LOG_MODULE_DECLARE(LSM6DSL, CONFIG_SENSOR_LOG_LEVEL);
 
 #define LSM6DSL_EMBEDDED_SLV0_ADDR       0x02
 #define LSM6DSL_EMBEDDED_SLV0_SUBADDR    0x03
@@ -61,7 +64,7 @@ static int lsm6dsl_lis2mdl_init(struct lsm6dsl_data *data, u8_t i2c_addr)
 	lsm6dsl_shub_write_slave_reg(data, i2c_addr,
 				     LIS2MDL_CFG_REG_A, mag_cfg, 1);
 
-	k_sleep(10); /* turn-on time in ms */
+	k_sleep(K_MSEC(10)); /* turn-on time in ms */
 
 	/* configure mag */
 	mag_cfg[0] = LIS2MDL_ODR_10HZ;
@@ -95,7 +98,7 @@ static int lsm6dsl_lps22hb_init(struct lsm6dsl_data *data, u8_t i2c_addr)
 	lsm6dsl_shub_write_slave_reg(data, i2c_addr,
 				     LPS22HB_CTRL_REG2, baro_cfg, 1);
 
-	k_sleep(1); /* turn-on time in ms */
+	k_sleep(K_MSEC(1)); /* turn-on time in ms */
 
 	/* configure device */
 	baro_cfg[0] = LPS22HB_ODR_10HZ | LPS22HB_LPF_EN | LPS22HB_BDU_EN;
@@ -146,7 +149,7 @@ static inline void lsm6dsl_shub_wait_completed(struct lsm6dsl_data *data)
 {
 	u16_t freq;
 
-	freq = (data->accel_freq == 0) ? 26 : data->accel_freq;
+	freq = (data->accel_freq == 0U) ? 26 : data->accel_freq;
 	k_sleep((2000U / freq) + 1);
 }
 
@@ -158,7 +161,7 @@ static inline void lsm6dsl_shub_embedded_en(struct lsm6dsl_data *data, bool on)
 				LSM6DSL_MASK_FUNC_CFG_EN,
 				func_en << LSM6DSL_SHIFT_FUNC_CFG_EN);
 
-	k_sleep(1);
+	k_sleep(K_MSEC(1));
 }
 
 #ifdef LSM6DSL_DEBUG
@@ -168,7 +171,7 @@ static int lsm6dsl_read_embedded_reg(struct lsm6dsl_data *data,
 	lsm6dsl_shub_embedded_en(data, true);
 
 	if (data->hw_tf->read_data(data, reg_addr, value, len) < 0) {
-		SYS_LOG_DBG("failed to read external reg: %02x", reg_addr);
+		LOG_DBG("failed to read external reg: %02x", reg_addr);
 		lsm6dsl_shub_embedded_en(data, false);
 		return -EIO;
 	}
@@ -186,7 +189,7 @@ static int lsm6dsl_shub_write_embedded_regs(struct lsm6dsl_data *data,
 	lsm6dsl_shub_embedded_en(data, true);
 
 	if (data->hw_tf->write_data(data, reg_addr, value, len) < 0) {
-		SYS_LOG_DBG("failed to write external reg: %02x", reg_addr);
+		LOG_DBG("failed to write external reg: %02x", reg_addr);
 		lsm6dsl_shub_embedded_en(data, false);
 		return -EIO;
 	}
@@ -253,7 +256,7 @@ static int lsm6dsl_shub_read_slave_reg(struct lsm6dsl_data *data,
 
 	if (lsm6dsl_shub_write_embedded_regs(data, LSM6DSL_EMBEDDED_SLV0_ADDR,
 					     slave, 3) < 0) {
-		SYS_LOG_DBG("error writing embedded reg");
+		LOG_DBG("error writing embedded reg");
 		return -EIO;
 	}
 
@@ -274,7 +277,7 @@ static int lsm6dsl_shub_write_slave_reg(struct lsm6dsl_data *data,
 					u8_t *value, u16_t len)
 {
 	u8_t slv_cfg[3];
-	u8_t cnt = 0;
+	u8_t cnt = 0U;
 
 	while (cnt < len) {
 		slv_cfg[0] = (slv_addr << 1) & ~LSM6DSL_EMBEDDED_SLVX_READ;
@@ -283,7 +286,7 @@ static int lsm6dsl_shub_write_slave_reg(struct lsm6dsl_data *data,
 		if (lsm6dsl_shub_write_embedded_regs(data,
 						     LSM6DSL_EMBEDDED_SLV0_ADDR,
 						     slv_cfg, 2) < 0) {
-			SYS_LOG_DBG("error writing embedded reg");
+			LOG_DBG("error writing embedded reg");
 			return -EIO;
 		}
 
@@ -291,7 +294,7 @@ static int lsm6dsl_shub_write_slave_reg(struct lsm6dsl_data *data,
 		if (lsm6dsl_shub_write_embedded_regs(data,
 					LSM6DSL_EMBEDDED_SLV0_DATAWRITE,
 					slv_cfg, 1) < 0) {
-			SYS_LOG_DBG("error writing embedded reg");
+			LOG_DBG("error writing embedded reg");
 			return -EIO;
 		}
 
@@ -310,7 +313,7 @@ static int lsm6dsl_shub_write_slave_reg(struct lsm6dsl_data *data,
 	if (lsm6dsl_shub_write_embedded_regs(data,
 					     LSM6DSL_EMBEDDED_SLV0_ADDR,
 					     slv_cfg, 3) < 0) {
-		SYS_LOG_DBG("error writing embedded reg");
+		LOG_DBG("error writing embedded reg");
 		return -EIO;
 	}
 
@@ -336,7 +339,7 @@ static int lsm6dsl_shub_set_data_channel(struct lsm6dsl_data *data)
 	if (lsm6dsl_shub_write_embedded_regs(data,
 					     LSM6DSL_EMBEDDED_SLV0_ADDR,
 					     slv_cfg, 3) < 0) {
-		SYS_LOG_DBG("error writing embedded reg");
+		LOG_DBG("error writing embedded reg");
 		return -EIO;
 	}
 
@@ -347,7 +350,7 @@ static int lsm6dsl_shub_set_data_channel(struct lsm6dsl_data *data)
 	if (lsm6dsl_shub_write_embedded_regs(data,
 					     LSM6DSL_EMBEDDED_SLV1_ADDR,
 					     slv_cfg, 3) < 0) {
-		SYS_LOG_DBG("error writing embedded reg");
+		LOG_DBG("error writing embedded reg");
 		return -EIO;
 	}
 
@@ -371,7 +374,7 @@ int lsm6dsl_shub_init_external_chip(struct device *dev)
 {
 	struct lsm6dsl_data *data = dev->driver_data;
 	u8_t i;
-	u8_t chip_id = 0;
+	u8_t chip_id = 0U;
 	u8_t slv_i2c_addr;
 	u8_t slv_wai_addr = lsm6dsl_shub_sens_list[0].wai_addr;
 
@@ -380,17 +383,17 @@ int lsm6dsl_shub_init_external_chip(struct device *dev)
 	 * So, try them one by one until we read the correct
 	 * chip ID.
 	 */
-	for (i = 0; i < ARRAY_SIZE(lsm6dsl_shub_sens_list[0].i2c_addr); i++) {
+	for (i = 0U; i < ARRAY_SIZE(lsm6dsl_shub_sens_list[0].i2c_addr); i++) {
 		slv_i2c_addr = lsm6dsl_shub_sens_list[0].i2c_addr[i];
 
-		if (slv_i2c_addr == 0) {
+		if (slv_i2c_addr == 0U) {
 			continue;
 		}
 
 		if (lsm6dsl_shub_read_slave_reg(data, slv_i2c_addr,
 						slv_wai_addr,
 						&chip_id, 1) < 0) {
-			SYS_LOG_DBG("failed reading external chip id");
+			LOG_DBG("failed reading external chip id");
 			return -EIO;
 		}
 		if (chip_id == lsm6dsl_shub_sens_list[0].wai_val) {
@@ -399,10 +402,10 @@ int lsm6dsl_shub_init_external_chip(struct device *dev)
 	}
 
 	if (i >= ARRAY_SIZE(lsm6dsl_shub_sens_list[0].i2c_addr)) {
-		SYS_LOG_DBG("invalid chip id 0x%x", chip_id);
+		LOG_DBG("invalid chip id 0x%x", chip_id);
 		return -EIO;
 	}
-	SYS_LOG_DBG("Ext Device Chip Id: %02x", chip_id);
+	LOG_DBG("Ext Device Chip Id: %02x", chip_id);
 	ext_i2c_addr = i;
 
 	/* init external device */

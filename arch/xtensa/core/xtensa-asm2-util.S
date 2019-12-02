@@ -228,15 +228,13 @@ xtensa_switch:
 _switch_restore_pc:
 	retw
 
-#ifdef CONFIG_XTENSA_ASM2
-
 /* Define our entry handler to load the struct kernel_t from the
  * MISC0 special register, and to find the nest and irq_stack values
  * at the precomputed offsets.
  */
 .align 4
 _handle_excint:
-	EXCINT_HANDLER MISC0, ___cpu_t_nested_OFFSET, ___cpu_t_irq_stack_OFFSET
+	EXCINT_HANDLER CONFIG_XTENSA_KERNEL_CPU_PTR_SR, ___cpu_t_nested_OFFSET, ___cpu_t_irq_stack_OFFSET
 
 /* Define the actual vectors for the hardware-defined levels with
  * DEF_EXCINT.  These load a C handler address and jump to our handler
@@ -307,4 +305,16 @@ _KernelExceptionVector:
 	j _Level1Vector
 .popsection
 
-#endif /* CONFIG_XTENSA_ASM2 */
+#ifdef XCHAL_DOUBLEEXC_VECTOR_VADDR
+.pushsection .DoubleExceptionVector.text, "ax"
+.global _DoubleExceptionVector
+_DoubleExceptionVector:
+#if XCHAL_HAVE_DEBUG
+/* Signals an unhandled double exception */
+1:	break	1, 4
+#else
+1:
+#endif
+	j	1b
+.popsection
+#endif

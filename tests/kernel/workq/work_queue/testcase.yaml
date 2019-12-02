@@ -1,7 +1,4 @@
 tests:
   kernel.workqueue:
-    tags: core bat_commit
-  kernel.workqueue.poll:
-    tags: core bat_commit
-    extra_configs:
-      - CONFIG_POLL=y
+    min_flash: 34
+    tags: kernel

@@ -5,17 +5,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <board.h>
-#include <gpio.h>
+#include <drivers/gpio.h>
 
-#include "common.h"
+#include "app_gpio.h"
+#include "storage.h"
+
 #include "ble_mesh.h"
 #include "device_composition.h"
 #include "state_binding.h"
 #include "transition.h"
 
 static struct bt_mesh_cfg_srv cfg_srv = {
-	.relay = BT_MESH_RELAY_DISABLED,
+	.relay = BT_MESH_RELAY_ENABLED,
 	.beacon = BT_MESH_BEACON_ENABLED,
 
 #if defined(CONFIG_BT_MESH_FRIEND)
@@ -32,9 +33,11 @@ static struct bt_mesh_cfg_srv cfg_srv = {
 
 	.default_ttl = 7,
 
-	/* 3 transmissions with 20ms interval */
+	/* 2 transmissions with 20ms interval */
 	.net_transmit = BT_MESH_TRANSMIT(2, 20),
-	.relay_retransmit = BT_MESH_TRANSMIT(2, 20),
+
+	/* 3 transmissions with 20ms interval */
+	.relay_retransmit = BT_MESH_TRANSMIT(3, 20),
 };
 
 static struct bt_mesh_health_srv health_srv = {
@@ -63,31 +66,27 @@ BT_MESH_MODEL_PUB_DEFINE(light_ctl_cli_pub, NULL, 2 + 9);
 
 BT_MESH_MODEL_PUB_DEFINE(vnd_pub, NULL, 3 + 6);
 
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_srv_pub_s0, NULL, 2 + 3);
-BT_MESH_MODEL_PUB_DEFINE(gen_onoff_cli_pub_s0, NULL, 2 + 4);
-
 BT_MESH_MODEL_PUB_DEFINE(gen_level_srv_pub_s0, NULL, 2 + 5);
 BT_MESH_MODEL_PUB_DEFINE(gen_level_cli_pub_s0, NULL, 2 + 7);
 /* Definitions of models publication context (End) */
 
 /* Definitions of models user data (Start) */
-struct generic_onoff_state gen_onoff_srv_root_user_data;
 
-struct generic_level_state gen_level_srv_root_user_data;
+struct lightness light;
+struct temperature temp;
+struct delta_uv duv;
 
-struct gen_def_trans_time_state gen_def_trans_time_srv_user_data;
+struct light_ctl_state state = {
+	.light = &light,
+	.temp = &temp,
+	.duv = &duv,
+	.transition = &transition,
+};
 
-struct generic_onpowerup_state gen_power_onoff_srv_user_data;
-
-struct light_lightness_state light_lightness_srv_user_data;
-
-struct light_ctl_state light_ctl_srv_user_data;
+struct light_ctl_state *const ctl = &state;
 
 struct vendor_state vnd_user_data;
 
-struct generic_onoff_state gen_onoff_srv_s0_user_data;
-
-struct generic_level_state gen_level_srv_s0_user_data;
 /* Definitions of models user data (End) */
 
 static struct bt_mesh_elem elements[];
@@ -100,111 +99,189 @@ static void gen_onoff_get(struct bt_mesh_model *model,
 			  struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 3 + 4);
-	struct generic_onoff_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_ONOFF_STATUS);
-	net_buf_simple_add_u8(msg, state->onoff);
+	net_buf_simple_add_u8(msg, (u8_t) get_current(ONOFF));
 
-	if (state->is_optional_para_available) {
-		net_buf_simple_add_u8(msg, state->target_onoff);
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->light->current == state->light->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_u8(msg, (u8_t) get_target(ONOFF));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send GEN_ONOFF_SRV Status response\n");
 	}
 }
 
-static bool gen_onoff_setunack(struct bt_mesh_model *model,
-			       struct bt_mesh_msg_ctx *ctx,
-			       struct net_buf_simple *buf)
+void gen_onoff_publish(struct bt_mesh_model *model)
 {
-	u8_t tid, onoff;
-	s64_t now;
+	int err;
 	struct net_buf_simple *msg = model->pub->msg;
-	struct generic_onoff_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	onoff = net_buf_simple_pull_u8(buf);
-	tid = net_buf_simple_pull_u8(buf);
-
-	if (onoff > STATE_ON) {
-		return false;
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
 	}
 
-	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
-	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
-		return true;
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_ONOFF_STATUS);
+	net_buf_simple_add_u8(msg, (u8_t) get_current(ONOFF));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_u8(msg, (u8_t) get_target(ONOFF));
+		net_buf_simple_add_u8(msg, state->transition->rt);
 	}
 
-	state->is_optional_para_available = 0x01;
-
-	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
-		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
-		break;
-	default:
-		return false;
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
 	}
-
-	enable_transition = DISABLE_TRANSITION;
-
-	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
-	state->last_msg_timestamp = now;
-	state->target_onoff = onoff;
-
-	onoff_tt_values(state);
-
-	if (state->tt_counter == 0) {
-		state->onoff = onoff;
-	}
-
-	if (bt_mesh_model_elem(model)->addr == elements[0].addr) {
-		/* Root element */
-		onoff_handler(state);
-	} else if (bt_mesh_model_elem(model)->addr == elements[1].addr) {
-		/* Secondary element */
-		printk("Hello World\n");
-	}
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_ONOFF_STATUS);
-		net_buf_simple_add_u8(msg, state->onoff);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
-
-	return true;
 }
 
 static void gen_onoff_set_unack(struct bt_mesh_model *model,
 				struct bt_mesh_msg_ctx *ctx,
 				struct net_buf_simple *buf)
 {
-	gen_onoff_setunack(model, ctx, buf);
+	u8_t tid, onoff, tt, delay;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	onoff = net_buf_simple_pull_u8(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	if (onoff > STATE_ON) {
+		return;
+	}
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(ONOFF, &onoff);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(ONOFF);
+	} else {
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
+	gen_onoff_publish(model);
+	onoff_handler(state);
 }
 
 static void gen_onoff_set(struct bt_mesh_model *model,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
-	if (gen_onoff_setunack(model, ctx, buf) == true) {
-		gen_onoff_get(model, ctx, buf);
+	u8_t tid, onoff, tt, delay;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	onoff = net_buf_simple_pull_u8(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	if (onoff > STATE_ON) {
+		return;
 	}
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		gen_onoff_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(ONOFF, &onoff);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(ONOFF);
+	} else {
+		gen_onoff_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
+	gen_onoff_get(model, ctx, buf);
+	gen_onoff_publish(model);
+	onoff_handler(state);
 }
 
 /* Generic OnOff Client message handlers */
@@ -215,41 +292,61 @@ static void gen_onoff_status(struct bt_mesh_model *model,
 	printk("Acknownledgement from GEN_ONOFF_SRV\n");
 	printk("Present OnOff = %02x\n", net_buf_simple_pull_u8(buf));
 
-	if (buf->len == 2) {
+	if (buf->len == 2U) {
 		printk("Target OnOff = %02x\n", net_buf_simple_pull_u8(buf));
 		printk("Remaining Time = %02x\n", net_buf_simple_pull_u8(buf));
 	}
 }
 
-/* Generic Level Server message handlers */
+/* Generic Level (lIGHTNESS) Server message handlers */
 static void gen_level_get(struct bt_mesh_model *model,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
-	struct generic_level_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
-	net_buf_simple_add_le16(msg, state->level);
+	net_buf_simple_add_le16(msg, (s16_t) get_current(LEVEL));
 
-	if (state->is_optional_para_available == 0x01) {
-		net_buf_simple_add_le16(msg, state->target_level);
-		net_buf_simple_add_u8(msg, state->tt);
-	} else if (state->is_optional_para_available == 0x02) {
-
-		if (state->last_delta < 0) {
-			net_buf_simple_add_le16(msg, INT16_MIN);
-		} else if (state->last_delta > 0) {
-			net_buf_simple_add_le16(msg, INT16_MAX);
-		}
-
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->light->current == state->light->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (s16_t) get_target(LEVEL));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send GEN_LEVEL_SRV Status response\n");
+	}
+}
+
+void gen_level_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
+	net_buf_simple_add_le16(msg, (s16_t) get_current(LEVEL));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (s16_t) get_target(LEVEL));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
 	}
 }
 
@@ -257,270 +354,449 @@ static void gen_level_set_unack(struct bt_mesh_model *model,
 				struct bt_mesh_msg_ctx *ctx,
 				struct net_buf_simple *buf)
 {
-	u8_t tid;
+	u8_t tid, tt, delay;
 	s16_t level;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct generic_level_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	level = (s16_t) net_buf_simple_pull_le16(buf);
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		return;
 	}
 
-	state->is_optional_para_available = 0x01;
-
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
 		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
-	state->target_level = level;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LEVEL, &level);
 
-	level_tt_values(state);
-
-	if (state->tt_counter == 0) {
-		state->level = level;
+	if (state->light->target != state->light->current) {
+		set_transition_values(LEVEL);
+	} else {
+		return;
 	}
 
-	if (bt_mesh_model_elem(model)->addr == elements[0].addr) {
-		/* Root element */
-		enable_transition = LEVEL_TT;
-		level_lightness_handler(state);
-	} else if (bt_mesh_model_elem(model)->addr == elements[1].addr) {
-		/* Secondary element */
-		enable_transition = LEVEL_TEMP_TT;
-		level_temp_handler(state);
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
 	}
 
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
-		net_buf_simple_add_le16(msg, state->level);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
+	state->transition->just_started = true;
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 static void gen_level_set(struct bt_mesh_model *model,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
-	gen_level_set_unack(model, ctx, buf);
+	u8_t tid, tt, delay;
+	s16_t level;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	level = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		gen_level_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LEVEL, &level);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(LEVEL);
+	} else {
+		gen_level_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
 	gen_level_get(model, ctx, buf);
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 static void gen_delta_set_unack(struct bt_mesh_model *model,
 				struct bt_mesh_msg_ctx *ctx,
 				struct net_buf_simple *buf)
 {
-	u8_t tid;
-	s32_t tmp32, delta;
+	u8_t tid, tt, delay;
+	static s16_t last_level;
+	s32_t target, delta;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct generic_level_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	delta = (s32_t) net_buf_simple_pull_le32(buf);
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr) {
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 
-		if (now - state->last_msg_timestamp <= K_SECONDS(6)) {
-			if (state->last_delta == delta) {
-				return;
-			}
-			tmp32 = state->last_level + delta;
-		} else {
+		if (state->light->delta == delta) {
+			return;
+		}
+		target = last_level + delta;
+
+	} else {
+		last_level = (s16_t) get_current(LEVEL);
+		target = last_level + delta;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
 			return;
 		}
 
-	} else {
-		state->last_level = state->level;
-		tmp32 = state->level + delta;
-	}
-
-	state->is_optional_para_available = 0x01;
-
-	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
-		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
 		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
-	state->last_delta = delta;
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
 
-	if (tmp32 < INT16_MIN) {
-		tmp32 = INT16_MIN;
-	} else if (tmp32 > INT16_MAX) {
-		tmp32 = INT16_MAX;
+	if (target < INT16_MIN) {
+		target = INT16_MIN;
+	} else if (target > INT16_MAX) {
+		target = INT16_MAX;
 	}
 
-	state->target_level = tmp32;
+	set_target(DELTA_LEVEL, &target);
 
-	delta_level_tt_values(state);
-
-	if (state->tt_counter_delta == 0) {
-		state->level = tmp32;
+	if (state->light->target != state->light->current) {
+		set_transition_values(LEVEL);
+	} else {
+		return;
 	}
 
-	if (bt_mesh_model_elem(model)->addr == elements[0].addr) {
-		/* Root element */
-		enable_transition = LEVEL_TT_DELTA;
-		level_lightness_handler(state);
-	} else if (bt_mesh_model_elem(model)->addr == elements[1].addr) {
-		/* Secondary element */
-		enable_transition = LEVEL_TEMP_TT_DELTA;
-		level_temp_handler(state);
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
 	}
 
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
-		net_buf_simple_add_le16(msg, state->level);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
+	state->transition->just_started = true;
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 static void gen_delta_set(struct bt_mesh_model *model,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
-	gen_delta_set_unack(model, ctx, buf);
+	u8_t tid, tt, delay;
+	static s16_t last_level;
+	s32_t target, delta;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s32_t) net_buf_simple_pull_le32(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+
+		if (state->light->delta == delta) {
+			gen_level_get(model, ctx, buf);
+			return;
+		}
+		target = last_level + delta;
+
+	} else {
+		last_level = (s16_t) get_current(LEVEL);
+		target = last_level + delta;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+
+	if (target < INT16_MIN) {
+		target = INT16_MIN;
+	} else if (target > INT16_MAX) {
+		target = INT16_MAX;
+	}
+
+	set_target(DELTA_LEVEL, &target);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(LEVEL);
+	} else {
+		gen_level_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
 	gen_level_get(model, ctx, buf);
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 static void gen_move_set_unack(struct bt_mesh_model *model,
 			       struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
 {
-	u8_t tid;
-	s16_t delta;
-	s32_t tmp32;
+	u8_t tid, tt, delay;
+	s16_t delta, target;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct generic_level_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	delta = (s16_t) net_buf_simple_pull_le16(buf);
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		return;
 	}
 
-	state->is_optional_para_available = 0x02;
-
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
 		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
-	state->last_delta = delta;
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = MOVE;
+	state->light->delta = delta;
 
-	tmp32 = state->level + delta;
-	if (tmp32 < INT16_MIN) {
-		tmp32 = INT16_MIN;
-	} else if (tmp32 > INT16_MAX) {
-		tmp32 = INT16_MAX;
+	if (delta < 0) {
+		target = INT16_MIN;
+		set_target(LEVEL, &target);
+	} else if (delta > 0) {
+		target = INT16_MAX;
+		set_target(LEVEL, &target);
+	} else if (delta == 0) {
+		state->light->target = state->light->current;
 	}
 
-	state->target_level = tmp32;
-
-	move_level_tt_values(state);
-
-	if (bt_mesh_model_elem(model)->addr == elements[0].addr) {
-		/* Root element */
-		if (delta == 0) {
-			k_timer_stop(&level_lightness_transition_timer);
-		} else {
-			enable_transition = LEVEL_TT_MOVE;
-			level_lightness_handler(state);
-		}
-	} else if (bt_mesh_model_elem(model)->addr == elements[1].addr) {
-		/* Secondary element */
-		if (delta == 0) {
-			k_timer_stop(&level_temp_transition_timer);
-		} else {
-			enable_transition = LEVEL_TEMP_TT_MOVE;
-			level_temp_handler(state);
-		}
+	if (state->light->target != state->light->current) {
+		set_transition_values(MOVE_LEVEL);
+	} else {
+		return;
 	}
 
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
-		net_buf_simple_add_le16(msg, state->level);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
+	if (state->transition->counter == 0U) {
+		return;
 	}
+
+	state->transition->just_started = true;
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 static void gen_move_set(struct bt_mesh_model *model,
 			 struct bt_mesh_msg_ctx *ctx,
 			 struct net_buf_simple *buf)
 {
-	gen_move_set_unack(model, ctx, buf);
+	u8_t tid, tt, delay;
+	s16_t delta, target;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		gen_level_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = MOVE;
+	state->light->delta = delta;
+
+	if (delta < 0) {
+		target = INT16_MIN;
+		set_target(LEVEL, &target);
+	} else if (delta > 0) {
+		target = INT16_MAX;
+		set_target(LEVEL, &target);
+	} else if (delta == 0) {
+		state->light->target = state->light->current;
+	}
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(MOVE_LEVEL);
+	} else {
+		gen_level_get(model, ctx, buf);
+		return;
+	}
+
+	if (state->transition->counter == 0U) {
+		return;
+	}
+
+	state->transition->just_started = true;
 	gen_level_get(model, ctx, buf);
+	gen_level_publish(model);
+	level_lightness_handler(state);
 }
 
 /* Generic Level Client message handlers */
@@ -531,7 +807,7 @@ static void gen_level_status(struct bt_mesh_model *model,
 	printk("Acknownledgement from GEN_LEVEL_SRV\n");
 	printk("Present Level = %04x\n", net_buf_simple_pull_le16(buf));
 
-	if (buf->len == 3) {
+	if (buf->len == 3U) {
 		printk("Target Level = %04x\n", net_buf_simple_pull_le16(buf));
 		printk("Remaining Time = %02x\n", net_buf_simple_pull_u8(buf));
 	}
@@ -543,13 +819,32 @@ static void gen_def_trans_time_get(struct bt_mesh_model *model,
 				   struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 1 + 4);
-	struct gen_def_trans_time_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x10));
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_GEN_DEF_TRANS_TIME_STATUS);
 	net_buf_simple_add_u8(msg, state->tt);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send GEN_DEF_TT_SRV Status response\n");
+	}
+}
+
+static void gen_def_trans_time_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_GEN_DEF_TRANS_TIME_STATUS);
+	net_buf_simple_add_u8(msg, state->tt);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
 	}
 }
 
@@ -558,32 +853,20 @@ static bool gen_def_trans_time_setunack(struct bt_mesh_model *model,
 					struct net_buf_simple *buf)
 {
 	u8_t tt;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct gen_def_trans_time_state *state = model->user_data;
-
+	struct light_ctl_state *state = model->user_data;
 	tt = net_buf_simple_pull_u8(buf);
-
 	/* Here, Model specification is silent about tid implementation */
 
 	if ((tt & 0x3F) == 0x3F) {
 		return false;
 	}
 
-	state->tt = tt;
-	default_tt = tt;
+	if (state->tt != tt) {
+		state->tt = tt;
+		default_tt = tt;
 
-	/* Do some work here to save value of state->tt on SoC flash */
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x10));
-		net_buf_simple_add_u8(msg, state->tt);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
+		gen_def_trans_time_publish(model);
+		save_on_flash(GEN_DEF_TRANS_TIME_STATE);
 	}
 
 	return true;
@@ -605,6 +888,8 @@ static void gen_def_trans_time_set(struct bt_mesh_model *model,
 	}
 }
 
+
+
 /* Generic Default Transition Time Client message handlers */
 static void gen_def_trans_time_status(struct bt_mesh_model *model,
 				      struct bt_mesh_msg_ctx *ctx,
@@ -620,9 +905,9 @@ static void gen_onpowerup_get(struct bt_mesh_model *model,
 			      struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 1 + 4);
-	struct generic_onpowerup_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x12));
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_GEN_ONPOWERUP_STATUS);
 	net_buf_simple_add_u8(msg, state->onpowerup);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
@@ -640,35 +925,44 @@ static void gen_onpowerup_status(struct bt_mesh_model *model,
 }
 
 /* Generic Power OnOff Setup Server message handlers */
+
+static void gen_onpowerup_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_GEN_ONPOWERUP_STATUS);
+	net_buf_simple_add_u8(msg, state->onpowerup);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
 static bool gen_onpowerup_setunack(struct bt_mesh_model *model,
 				   struct bt_mesh_msg_ctx *ctx,
 				   struct net_buf_simple *buf)
 {
 	u8_t onpowerup;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct generic_onpowerup_state *state = model->user_data;
-
+	struct light_ctl_state *state = model->user_data;
 	onpowerup = net_buf_simple_pull_u8(buf);
-
 	/* Here, Model specification is silent about tid implementation */
 
 	if (onpowerup > STATE_RESTORE) {
 		return false;
 	}
-	state->onpowerup = onpowerup;
 
-	/* Do some work here to save value of state->onpowerup on SoC flash */
+	if (state->onpowerup != onpowerup) {
+		state->onpowerup = onpowerup;
 
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x12));
-		net_buf_simple_add_u8(msg, state->onpowerup);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
+		gen_onpowerup_publish(model);
+		save_on_flash(GEN_ONPOWERUP_STATE);
 	}
 
 	return true;
@@ -698,7 +992,10 @@ static void vnd_get(struct bt_mesh_model *model,
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(3 + 6 + 4);
 	struct vendor_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_3(0x03, CID_ZEPHYR));
+	/* This is dummy response for demo purpose */
+	state->response = 0xA578FEB3;
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_3(0x04, CID_ZEPHYR));
 	net_buf_simple_add_le16(msg, state->current);
 	net_buf_simple_add_le32(msg, state->response);
 
@@ -720,27 +1017,27 @@ static void vnd_set_unack(struct bt_mesh_model *model,
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
-	    (now - state->last_msg_timestamp <= 6000)) {
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		return;
 	}
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
 	state->current = current;
-
-	/* This is dummy response for demo purpose */
-	state->response = 0xA578FEB3;
 
 	printk("Vendor model message = %04x\n", state->current);
 
 	if (state->current == STATE_ON) {
 		/* LED2 On */
-		gpio_pin_write(led_device[1], LED1_GPIO_PIN, 0);
+		gpio_pin_write(led_device[1], DT_ALIAS_LED1_GPIOS_PIN, 0);
 	} else {
 		/* LED2 Off */
-		gpio_pin_write(led_device[1], LED1_GPIO_PIN, 1);
+		gpio_pin_write(led_device[1], DT_ALIAS_LED1_GPIOS_PIN, 1);
 	}
 }
 
@@ -767,20 +1064,49 @@ static void light_lightness_get(struct bt_mesh_model *model,
 				struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x4E));
-	net_buf_simple_add_le16(msg, state->actual);
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_LIGHTNESS_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(ACTUAL));
 
-	if (state->is_optional_para_available) {
-		net_buf_simple_add_le16(msg, state->target_actual);
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->light->current == state->light->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(ACTUAL));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightLightnessAct Status response\n");
+	}
+}
+
+void light_lightness_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_LIGHTNESS_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(ACTUAL));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(ACTUAL));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
 	}
 }
 
@@ -788,78 +1114,147 @@ static void light_lightness_set_unack(struct bt_mesh_model *model,
 				      struct bt_mesh_msg_ctx *ctx,
 				      struct net_buf_simple *buf)
 {
-	u8_t tid;
+	u8_t tid, tt, delay;
 	u16_t actual;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	actual = net_buf_simple_pull_le16(buf);
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		return;
 	}
 
-	state->is_optional_para_available = 0x01;
-
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
 		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
 
-	if (actual > 0 && actual < state->light_range_min) {
-		actual = state->light_range_min;
-	} else if (actual > state->light_range_max) {
-		actual = state->light_range_max;
+	if (actual > 0 && actual < state->light->range_min) {
+		actual = state->light->range_min;
+	} else if (actual > state->light->range_max) {
+		actual = state->light->range_max;
 	}
 
-	state->target_actual = actual;
+	set_target(ACTUAL, &actual);
 
-	light_lightnes_actual_tt_values(state);
-
-	if (state->tt_counter_actual == 0) {
-		state->actual = actual;
+	if (state->light->target != state->light->current) {
+		set_transition_values(ACTUAL);
+	} else {
+		return;
 	}
 
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
+	light_lightness_publish(model);
 	light_lightness_actual_handler(state);
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x4E));
-		net_buf_simple_add_le16(msg, state->actual);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
 }
 
 static void light_lightness_set(struct bt_mesh_model *model,
 				struct bt_mesh_msg_ctx *ctx,
 				struct net_buf_simple *buf)
 {
-	light_lightness_set_unack(model, ctx, buf);
+	u8_t tid, tt, delay;
+	u16_t actual;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	actual = net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		light_lightness_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+
+	if (actual > 0 && actual < state->light->range_min) {
+		actual = state->light->range_min;
+	} else if (actual > state->light->range_max) {
+		actual = state->light->range_max;
+	}
+
+	set_target(ACTUAL, &actual);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(ACTUAL);
+	} else {
+		light_lightness_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
 	light_lightness_get(model, ctx, buf);
+	light_lightness_publish(model);
+	light_lightness_actual_handler(state);
 }
 
 static void light_lightness_linear_get(struct bt_mesh_model *model,
@@ -867,20 +1262,51 @@ static void light_lightness_linear_get(struct bt_mesh_model *model,
 				       struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x52));
-	net_buf_simple_add_le16(msg, state->linear);
+	bt_mesh_model_msg_init(msg,
+			       BT_MESH_MODEL_LIGHT_LIGHTNESS_LINEAR_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(LINEAR));
 
-	if (state->is_optional_para_available) {
-		net_buf_simple_add_le16(msg, state->target_linear);
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->light->current == state->light->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(LINEAR));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightLightnessLin Status response\n");
+	}
+}
+
+void light_lightness_linear_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg,
+			       BT_MESH_MODEL_LIGHT_LIGHTNESS_LINEAR_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(LINEAR));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(LINEAR));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
 	}
 }
 
@@ -888,71 +1314,133 @@ static void light_lightness_linear_set_unack(struct bt_mesh_model *model,
 					     struct bt_mesh_msg_ctx *ctx,
 					     struct net_buf_simple *buf)
 {
-	u8_t tid;
+	u8_t tid, tt, delay;
 	u16_t linear;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	linear = net_buf_simple_pull_le16(buf);
 	tid = net_buf_simple_pull_u8(buf);
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		return;
 	}
 
-	state->is_optional_para_available = 0x01;
-
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
 		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
-	state->target_linear = linear;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LINEAR, &linear);
 
-	light_lightnes_linear_tt_values(state);
-
-	if (state->tt_counter_linear == 0) {
-		state->linear = linear;
+	if (state->light->target != state->light->current) {
+		set_transition_values(LINEAR);
+	} else {
+		return;
 	}
 
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
+	light_lightness_linear_publish(model);
 	light_lightness_linear_handler(state);
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x52));
-		net_buf_simple_add_le16(msg, state->linear);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
 }
 
 static void light_lightness_linear_set(struct bt_mesh_model *model,
 				       struct bt_mesh_msg_ctx *ctx,
 				       struct net_buf_simple *buf)
 {
-	light_lightness_linear_set_unack(model, ctx, buf);
+	u8_t tid, tt, delay;
+	u16_t linear;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	linear = net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		light_lightness_linear_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LINEAR, &linear);
+
+	if (state->light->target != state->light->current) {
+		set_transition_values(LINEAR);
+	} else {
+		light_lightness_linear_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+	}
+
+	state->transition->just_started = true;
 	light_lightness_linear_get(model, ctx, buf);
+	light_lightness_linear_publish(model);
+	light_lightness_linear_handler(state);
 }
 
 static void light_lightness_last_get(struct bt_mesh_model *model,
@@ -960,10 +1448,10 @@ static void light_lightness_last_get(struct bt_mesh_model *model,
 				     struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 2 + 4);
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x54));
-	net_buf_simple_add_le16(msg, state->last);
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_LIGHTNESS_LAST_STATUS);
+	net_buf_simple_add_le16(msg, state->light->last);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightLightnessLast Status response\n");
@@ -975,10 +1463,11 @@ static void light_lightness_default_get(struct bt_mesh_model *model,
 					struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 2 + 4);
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x56));
-	net_buf_simple_add_le16(msg, state->def);
+	bt_mesh_model_msg_init(msg,
+			       BT_MESH_MODEL_LIGHT_LIGHTNESS_DEFAULT_STATUS);
+	net_buf_simple_add_le16(msg, state->light->def);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightLightnessDef Status response\n");
@@ -990,44 +1479,58 @@ static void light_lightness_range_get(struct bt_mesh_model *model,
 				      struct net_buf_simple *buf)
 {
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x58));
-	net_buf_simple_add_u8(msg, state->status_code);
-	net_buf_simple_add_le16(msg, state->light_range_min);
-	net_buf_simple_add_le16(msg, state->light_range_max);
+	state->light->status_code = RANGE_SUCCESSFULLY_UPDATED;
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_LIGHTNESS_RANGE_STATUS);
+	net_buf_simple_add_u8(msg, state->light->status_code);
+	net_buf_simple_add_le16(msg, state->light->range_min);
+	net_buf_simple_add_le16(msg, state->light->range_max);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightLightnessRange Status response\n");
 	}
-
-	state->status_code = RANGE_SUCCESSFULLY_UPDATED;
 }
 
 /* Light Lightness Setup Server message handlers */
+
+static void light_lightness_default_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg,
+			       BT_MESH_MODEL_LIGHT_LIGHTNESS_DEFAULT_STATUS);
+	net_buf_simple_add_le16(msg, state->light->def);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
 static void light_lightness_default_set_unack(struct bt_mesh_model *model,
 					      struct bt_mesh_msg_ctx *ctx,
 					      struct net_buf_simple *buf)
 {
-	struct net_buf_simple *msg = model->pub->msg;
-	struct light_lightness_state *state = model->user_data;
+	u16_t lightness;
+	struct light_ctl_state *state = model->user_data;
 
-	state->def = net_buf_simple_pull_le16(buf);
+	lightness = net_buf_simple_pull_le16(buf);
 
 	/* Here, Model specification is silent about tid implementation */
 
-	/* Do some work here to save value of state->def on SoC flash */
+	if (state->light->def != lightness) {
+		state->light->def = constrain_lightness(lightness);
 
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x56));
-		net_buf_simple_add_le16(msg, state->def);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
+		light_lightness_default_publish(model);
+		save_on_flash(LIGHTNESS_TEMP_DEF_STATE);
 	}
 }
 
@@ -1039,51 +1542,58 @@ static void light_lightness_default_set(struct bt_mesh_model *model,
 	light_lightness_default_get(model, ctx, buf);
 }
 
+static void light_lightness_range_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_LIGHTNESS_RANGE_STATUS);
+	net_buf_simple_add_u8(msg, state->light->status_code);
+	net_buf_simple_add_le16(msg, state->light->range_min);
+	net_buf_simple_add_le16(msg, state->light->range_max);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
 static bool light_lightness_range_setunack(struct bt_mesh_model *model,
 					   struct bt_mesh_msg_ctx *ctx,
 					   struct net_buf_simple *buf)
 {
 	u16_t min, max;
-	struct net_buf_simple *msg = model->pub->msg;
-	struct light_lightness_state *state = model->user_data;
+	struct light_ctl_state *state = model->user_data;
 
 	min = net_buf_simple_pull_le16(buf);
 	max = net_buf_simple_pull_le16(buf);
 
 	/* Here, Model specification is silent about tid implementation */
 
-	if (min == 0 || max == 0) {
+	if (min == 0U || max == 0U) {
 		return false;
 	} else {
 		if (min <= max) {
-			state->status_code = RANGE_SUCCESSFULLY_UPDATED;
+			state->light->status_code = RANGE_SUCCESSFULLY_UPDATED;
 
-			state->light_range_min = min;
-			state->light_range_max = max;
+			if (state->light->range_min != min ||
+			    state->light->range_max != max) {
 
-			/* Do some work here to save values of
-			 * state->light_range_min &
-			 * state->light_range_max
-			 * on SoC flash
-			 */
+				state->light->range_min = min;
+				state->light->range_max = max;
+
+				light_lightness_range_publish(model);
+				save_on_flash(LIGHTNESS_RANGE);
+			}
 		} else {
 			/* The provided value for Range Max cannot be set */
-			state->status_code = CANNOT_SET_RANGE_MAX;
+			state->light->status_code = CANNOT_SET_RANGE_MAX;
 			return false;
-		}
-	}
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x58));
-		net_buf_simple_add_u8(msg, state->status_code);
-		net_buf_simple_add_le16(msg, state->light_range_min);
-		net_buf_simple_add_le16(msg, state->light_range_max);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
 		}
 	}
 
@@ -1114,7 +1624,7 @@ static void light_lightness_status(struct bt_mesh_model *model,
 	printk("Acknownledgement from LIGHT_LIGHTNESS_SRV (Actual)\n");
 	printk("Present Lightness = %04x\n", net_buf_simple_pull_le16(buf));
 
-	if (buf->len == 3) {
+	if (buf->len == 3U) {
 		printk("Target Lightness = %04x\n",
 		       net_buf_simple_pull_le16(buf));
 		printk("Remaining Time = %02x\n", net_buf_simple_pull_u8(buf));
@@ -1128,7 +1638,7 @@ static void light_lightness_linear_status(struct bt_mesh_model *model,
 	printk("Acknownledgement from LIGHT_LIGHTNESS_SRV (Linear)\n");
 	printk("Present Lightness = %04x\n", net_buf_simple_pull_le16(buf));
 
-	if (buf->len == 3) {
+	if (buf->len == 3U) {
 		printk("Target Lightness = %04x\n",
 		       net_buf_simple_pull_le16(buf));
 		printk("Remaining Time = %02x\n", net_buf_simple_pull_u8(buf));
@@ -1169,32 +1679,67 @@ static void light_ctl_get(struct bt_mesh_model *model,
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 9 + 4);
 	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x60));
-	net_buf_simple_add_le16(msg, state->lightness);
-	net_buf_simple_add_le16(msg, state->temp);
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL));
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL_TEMP));
 
-	if (state->is_optional_para_available) {
-		net_buf_simple_add_le16(msg, state->target_lightness);
-		net_buf_simple_add_le16(msg, state->target_temp);
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->light->current == state->light->target &&
+	    state->temp->current == state->temp->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL));
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL_TEMP));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightCTL Status response\n");
 	}
 }
 
-static bool light_ctl_setunack(struct bt_mesh_model *model,
-			       struct bt_mesh_msg_ctx *ctx,
-			       struct net_buf_simple *buf)
+void light_ctl_publish(struct bt_mesh_model *model)
 {
-	u8_t tid;
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_STATUS);
+
+	/* Here, as per Model specification, status should be
+	 * made up of lightness & temperature values only
+	 */
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL));
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL_TEMP));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL));
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL_TEMP));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
+static void light_ctl_set_unack(struct bt_mesh_model *model,
+				struct bt_mesh_msg_ctx *ctx,
+				struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
 	s16_t delta_uv;
 	u16_t lightness, temp;
 	s64_t now;
-	struct net_buf_simple *msg = model->pub->msg;
 	struct light_ctl_state *state = model->user_data;
 
 	lightness = net_buf_simple_pull_le16(buf);
@@ -1203,91 +1748,161 @@ static bool light_ctl_setunack(struct bt_mesh_model *model,
 	tid = net_buf_simple_pull_u8(buf);
 
 	if (temp < TEMP_MIN || temp > TEMP_MAX) {
-		return false;
+		return;
 	}
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
-		return true;
+		return;
 	}
-
-	state->is_optional_para_available = 0x01;
 
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
-		return false;
+		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
-	state->target_lightness = lightness;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(CTL, &lightness);
 
-	if (temp < state->temp_range_min) {
-		temp = state->temp_range_min;
-	} else if (temp > state->temp_range_max) {
-		temp = state->temp_range_max;
+	if (temp < state->temp->range_min) {
+		temp = state->temp->range_min;
+	} else if (temp > state->temp->range_max) {
+		temp = state->temp->range_max;
 	}
 
-	state->target_temp = temp;
-	state->target_delta_uv = delta_uv;
+	set_target(CTL_TEMP, &temp);
+	set_target(CTL_DELTA_UV, &delta_uv);
 
-	light_ctl_tt_values(state);
-
-	if (state->tt_counter == 0) {
-		state->lightness = lightness;
-		state->temp = temp;
-		state->delta_uv = delta_uv;
+	if (state->light->target != state->light->current ||
+	    state->temp->target != state->temp->current ||
+	    state->duv->target != state->duv->current) {
+		set_transition_values(CTL);
+	} else {
+		return;
 	}
 
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+		state->temp->current = state->temp->target;
+		state->duv->current = state->duv->target;
+	}
+
+	state->transition->just_started = true;
+	light_ctl_publish(model);
 	light_ctl_handler(state);
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x60));
-
-		/* Here, as per Model specification, status should be
-		 * made up of lightness & temperature values only
-		 */
-		net_buf_simple_add_le16(msg, state->lightness);
-		net_buf_simple_add_le16(msg, state->temp);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
-
-	return true;
-}
-
-static void light_ctl_set_unack(struct bt_mesh_model *model,
-				struct bt_mesh_msg_ctx *ctx,
-				struct net_buf_simple *buf)
-{
-	light_ctl_setunack(model, ctx, buf);
 }
 
 static void light_ctl_set(struct bt_mesh_model *model,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
-	if (light_ctl_setunack(model, ctx, buf) == true) {
-		light_ctl_get(model, ctx, buf);
+	u8_t tid, tt, delay;
+	s16_t delta_uv;
+	u16_t lightness, temp;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	lightness = net_buf_simple_pull_le16(buf);
+	temp = net_buf_simple_pull_le16(buf);
+	delta_uv = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	if (temp < TEMP_MIN || temp > TEMP_MAX) {
+		return;
 	}
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		light_ctl_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(CTL, &lightness);
+
+	if (temp < state->temp->range_min) {
+		temp = state->temp->range_min;
+	} else if (temp > state->temp->range_max) {
+		temp = state->temp->range_max;
+	}
+
+	set_target(CTL_TEMP, &temp);
+	set_target(CTL_DELTA_UV, &delta_uv);
+
+	if (state->light->target != state->light->current ||
+	    state->temp->target != state->temp->current ||
+	    state->duv->target != state->duv->current) {
+		set_transition_values(CTL);
+	} else {
+		light_ctl_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->light->current = state->light->target;
+		state->temp->current = state->temp->target;
+		state->duv->current = state->duv->target;
+	}
+
+	state->transition->just_started = true;
+	light_ctl_get(model, ctx, buf);
+	light_ctl_publish(model);
+	light_ctl_handler(state);
 }
 
 static void light_ctl_temp_range_get(struct bt_mesh_model *model,
@@ -1297,16 +1912,16 @@ static void light_ctl_temp_range_get(struct bt_mesh_model *model,
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
 	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x63));
-	net_buf_simple_add_u8(msg, state->status_code);
-	net_buf_simple_add_le16(msg, state->temp_range_min);
-	net_buf_simple_add_le16(msg, state->temp_range_max);
+	state->temp->status_code = RANGE_SUCCESSFULLY_UPDATED;
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_TEMP_RANGE_STATUS);
+	net_buf_simple_add_u8(msg, state->temp->status_code);
+	net_buf_simple_add_le16(msg, state->temp->range_min);
+	net_buf_simple_add_le16(msg, state->temp->range_max);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightCTL Temp Range Status response\n");
 	}
-
-	state->status_code = RANGE_SUCCESSFULLY_UPDATED;
 }
 
 static void light_ctl_default_get(struct bt_mesh_model *model,
@@ -1316,10 +1931,10 @@ static void light_ctl_default_get(struct bt_mesh_model *model,
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 6 + 4);
 	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x68));
-	net_buf_simple_add_le16(msg, state->lightness_def);
-	net_buf_simple_add_le16(msg, state->temp_def);
-	net_buf_simple_add_le16(msg, state->delta_uv_def);
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_DEFAULT_STATUS);
+	net_buf_simple_add_le16(msg, state->light->def);
+	net_buf_simple_add_le16(msg, state->temp->def);
+	net_buf_simple_add_le16(msg, state->duv->def);
 
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightCTL Default Status response\n");
@@ -1327,13 +1942,34 @@ static void light_ctl_default_get(struct bt_mesh_model *model,
 }
 
 /* Light CTL Setup Server message handlers */
+
+static void light_ctl_default_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_DEFAULT_STATUS);
+	net_buf_simple_add_le16(msg, state->light->def);
+	net_buf_simple_add_le16(msg, state->temp->def);
+	net_buf_simple_add_le16(msg, state->duv->def);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
 static bool light_ctl_default_setunack(struct bt_mesh_model *model,
 				       struct bt_mesh_msg_ctx *ctx,
 				       struct net_buf_simple *buf)
 {
 	u16_t lightness, temp;
 	s16_t delta_uv;
-	struct net_buf_simple *msg = model->pub->msg;
 	struct light_ctl_state *state = model->user_data;
 
 	lightness = net_buf_simple_pull_le16(buf);
@@ -1346,33 +1982,20 @@ static bool light_ctl_default_setunack(struct bt_mesh_model *model,
 		return false;
 	}
 
-	if (temp < state->temp_range_min) {
-		temp = state->temp_range_min;
-	} else if (temp > state->temp_range_max) {
-		temp = state->temp_range_max;
+	if (temp < state->temp->range_min) {
+		temp = state->temp->range_min;
+	} else if (temp > state->temp->range_max) {
+		temp = state->temp->range_max;
 	}
 
-	state->lightness_def = lightness;
-	state->temp_def = temp;
-	state->delta_uv_def = delta_uv;
+	if (state->light->def != lightness || state->temp->def != temp ||
+	    state->duv->def != delta_uv) {
+		state->light->def = constrain_lightness(lightness);
+		state->temp->def = temp;
+		state->duv->def = delta_uv;
 
-	/* Do some work here to save values of
-	 * state->lightness_def, state->temp_Def & state->delta_uv_def
-	 * on SoC flash
-	 */
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x68));
-		net_buf_simple_add_le16(msg, state->lightness_def);
-		net_buf_simple_add_le16(msg, state->temp_def);
-		net_buf_simple_add_le16(msg, state->delta_uv_def);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
+		light_ctl_default_publish(model);
+		save_on_flash(LIGHTNESS_TEMP_DEF_STATE);
 	}
 
 	return true;
@@ -1394,12 +2017,32 @@ static void light_ctl_default_set(struct bt_mesh_model *model,
 	}
 }
 
+static void light_ctl_temp_range_publish(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_TEMP_RANGE_STATUS);
+	net_buf_simple_add_u8(msg, state->temp->status_code);
+	net_buf_simple_add_le16(msg, state->temp->range_min);
+	net_buf_simple_add_le16(msg, state->temp->range_max);
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
 static bool light_ctl_temp_range_setunack(struct bt_mesh_model *model,
 					  struct bt_mesh_msg_ctx *ctx,
 					  struct net_buf_simple *buf)
 {
 	u16_t min, max;
-	struct net_buf_simple *msg = model->pub->msg;
 	struct light_ctl_state *state = model->user_data;
 
 	min = net_buf_simple_pull_le16(buf);
@@ -1414,32 +2057,21 @@ static bool light_ctl_temp_range_setunack(struct bt_mesh_model *model,
 	}
 
 	if (min <= max) {
-		state->status_code = RANGE_SUCCESSFULLY_UPDATED;
-		state->temp_range_min = min;
-		state->temp_range_max = max;
+		state->temp->status_code = RANGE_SUCCESSFULLY_UPDATED;
 
-		/* Do some work here to save values of
-		 * state->temp_range_min & state->temp_range_min
-		 * on SoC flash
-		 */
+		if (state->temp->range_min != min ||
+		    state->temp->range_max != max) {
+
+			state->temp->range_min = min;
+			state->temp->range_max = max;
+
+			light_ctl_temp_range_publish(model);
+			save_on_flash(TEMPERATURE_RANGE);
+		}
 	} else {
 		/* The provided value for Range Max cannot be set */
-		state->status_code = CANNOT_SET_RANGE_MAX;
+		state->temp->status_code = CANNOT_SET_RANGE_MAX;
 		return false;
-	}
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x63));
-		net_buf_simple_add_u8(msg, state->status_code);
-		net_buf_simple_add_le16(msg, state->temp_range_min);
-		net_buf_simple_add_le16(msg, state->temp_range_max);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
 	}
 
 	return true;
@@ -1471,7 +2103,7 @@ static void light_ctl_status(struct bt_mesh_model *model,
 	printk("Present CTL Temperature = %04x\n",
 	       net_buf_simple_pull_le16(buf));
 
-	if (buf->len == 5) {
+	if (buf->len == 5U) {
 		printk("Target CTL Lightness = %04x\n",
 		       net_buf_simple_pull_le16(buf));
 		printk("Target CTL Temperature = %04x\n",
@@ -1500,7 +2132,7 @@ static void light_ctl_temp_status(struct bt_mesh_model *model,
 	printk("Present CTL Delta UV = %04x\n",
 	       net_buf_simple_pull_le16(buf));
 
-	if (buf->len == 5) {
+	if (buf->len == 5U) {
 		printk("Target CTL Temperature = %04x\n",
 		       net_buf_simple_pull_le16(buf));
 		printk("Target CTL Delta UV = %04x\n",
@@ -1527,33 +2159,63 @@ static void light_ctl_temp_get(struct bt_mesh_model *model,
 	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 9 + 4);
 	struct light_ctl_state *state = model->user_data;
 
-	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x66));
-	net_buf_simple_add_le16(msg, state->temp);
-	net_buf_simple_add_le16(msg, state->delta_uv);
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_TEMP_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL_TEMP));
+	net_buf_simple_add_le16(msg, (s16_t) get_current(CTL_DELTA_UV));
 
-	if (state->is_optional_para_available) {
-		net_buf_simple_add_le16(msg, state->target_temp);
-		net_buf_simple_add_le16(msg, state->target_delta_uv);
-		net_buf_simple_add_u8(msg, state->tt);
+	if (state->temp->current == state->temp->target &&
+	    state->duv->current == state->duv->target) {
+		goto send;
 	}
 
-	state->is_optional_para_available = 0x00;
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL_TEMP));
+		net_buf_simple_add_le16(msg, (s16_t) get_target(CTL_DELTA_UV));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
 
+send:
 	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
 		printk("Unable to send LightCTL Temp. Status response\n");
 	}
 }
 
-static bool light_ctl_temp_setunack(struct bt_mesh_model *model,
-				    struct bt_mesh_msg_ctx *ctx,
-				    struct net_buf_simple *buf)
+void light_ctl_temp_publish(struct bt_mesh_model *model)
 {
-	u8_t tid;
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_LIGHT_CTL_TEMP_STATUS);
+	net_buf_simple_add_le16(msg, (u16_t) get_current(CTL_TEMP));
+	net_buf_simple_add_le16(msg, (s16_t) get_current(CTL_DELTA_UV));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (u16_t) get_target(CTL_TEMP));
+		net_buf_simple_add_le16(msg, (s16_t) get_target(CTL_DELTA_UV));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
+static void light_ctl_temp_set_unack(struct bt_mesh_model *model,
+				     struct bt_mesh_msg_ctx *ctx,
+				     struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
 	s16_t delta_uv;
 	u16_t temp;
 	s64_t now;
-
-	struct net_buf_simple *msg = model->pub->msg;
 	struct light_ctl_state *state = model->user_data;
 
 	temp = net_buf_simple_pull_le16(buf);
@@ -1561,86 +2223,671 @@ static bool light_ctl_temp_setunack(struct bt_mesh_model *model,
 	tid = net_buf_simple_pull_u8(buf);
 
 	if (temp < TEMP_MIN || temp > TEMP_MAX) {
-		return false;
+		return;
 	}
 
 	now = k_uptime_get();
-	if (state->last_tid == tid && state->last_tx_addr == ctx->addr &&
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
 	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
-		return true;
+		return;
 	}
-
-	state->is_optional_para_available = 0x01;
 
 	switch (buf->len) {
-	case 0x00:	/* No optional fields are available */
-		state->tt = default_tt;
-		state->delay = 0;
-		state->is_optional_para_available = 0x00;
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
 		break;
-	case 0x02:	/* Optional fields are available */
-		state->tt = net_buf_simple_pull_u8(buf);
-		state->delay = net_buf_simple_pull_u8(buf);
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
 		break;
 	default:
-		return false;
+		return;
 	}
 
-	enable_transition = DISABLE_TRANSITION;
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
 
 	state->last_tid = tid;
-	state->last_tx_addr = ctx->addr;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
 	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
 
-	if (temp < state->temp_range_min) {
-		temp = state->temp_range_min;
-	} else if (temp > state->temp_range_max) {
-		temp = state->temp_range_max;
+	if (temp < state->temp->range_min) {
+		temp = state->temp->range_min;
+	} else if (temp > state->temp->range_max) {
+		temp = state->temp->range_max;
 	}
 
-	state->target_temp = temp;
-	state->target_delta_uv = delta_uv;
+	set_target(CTL_TEMP, &temp);
+	set_target(CTL_DELTA_UV, &delta_uv);
 
-	light_ctl_temp_tt_values(state);
-
-	if (state->tt_counter_temp == 0) {
-		state->temp = temp;
-		state->delta_uv = delta_uv;
+	if (state->temp->target != state->temp->current ||
+	    state->duv->target != state->duv->current) {
+		set_transition_values(CTL_TEMP);
+	} else {
+		return;
 	}
 
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+		state->duv->current = state->duv->target;
+	}
+
+	state->transition->just_started = true;
+	light_ctl_temp_publish(model);
 	light_ctl_temp_handler(state);
-
-	if (model->pub->addr != BT_MESH_ADDR_UNASSIGNED) {
-		int err;
-
-		bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_2(0x82, 0x66));
-		net_buf_simple_add_le16(msg, state->temp);
-		net_buf_simple_add_le16(msg, state->delta_uv);
-
-		err = bt_mesh_model_publish(model);
-		if (err) {
-			printk("bt_mesh_model_publish err %d\n", err);
-		}
-	}
-
-	return true;
-}
-
-static void light_ctl_temp_set_unack(struct bt_mesh_model *model,
-				     struct bt_mesh_msg_ctx *ctx,
-				     struct net_buf_simple *buf)
-{
-	light_ctl_temp_setunack(model, ctx, buf);
 }
 
 static void light_ctl_temp_set(struct bt_mesh_model *model,
 			       struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
 {
-	if (light_ctl_temp_setunack(model, ctx, buf) == true) {
+	u8_t tid, tt, delay;
+	s16_t delta_uv;
+	u16_t temp;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	temp = net_buf_simple_pull_le16(buf);
+	delta_uv = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	if (temp < TEMP_MIN || temp > TEMP_MAX) {
+		return;
+	}
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
 		light_ctl_temp_get(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+
+	if (temp < state->temp->range_min) {
+		temp = state->temp->range_min;
+	} else if (temp > state->temp->range_max) {
+		temp = state->temp->range_max;
+	}
+
+	set_target(CTL_TEMP, &temp);
+	set_target(CTL_DELTA_UV, &delta_uv);
+
+	if (state->temp->target != state->temp->current ||
+	    state->duv->target != state->duv->current) {
+		set_transition_values(CTL_TEMP);
+	} else {
+		light_ctl_temp_get(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+		state->duv->current = state->duv->target;
+	}
+
+	state->transition->just_started = true;
+	light_ctl_temp_get(model, ctx, buf);
+	light_ctl_temp_publish(model);
+	light_ctl_temp_handler(state);
+}
+
+/* Generic Level (TEMPERARTURE) Server message handlers */
+static void gen_level_get_temp(struct bt_mesh_model *model,
+			       struct bt_mesh_msg_ctx *ctx,
+			       struct net_buf_simple *buf)
+{
+	struct net_buf_simple *msg = NET_BUF_SIMPLE(2 + 5 + 4);
+	struct light_ctl_state *state = model->user_data;
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
+	net_buf_simple_add_le16(msg, (s16_t) get_current(LEVEL_TEMP));
+
+	if (state->temp->current == state->temp->target) {
+		goto send;
+	}
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (s16_t) get_target(LEVEL_TEMP));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+send:
+	if (bt_mesh_model_send(model, ctx, msg, NULL, NULL)) {
+		printk("Unable to send GEN_LEVEL_SRV Status response\n");
 	}
 }
+
+void gen_level_publish_temp(struct bt_mesh_model *model)
+{
+	int err;
+	struct net_buf_simple *msg = model->pub->msg;
+	struct light_ctl_state *state = model->user_data;
+
+	if (model->pub->addr == BT_MESH_ADDR_UNASSIGNED) {
+		return;
+	}
+
+	bt_mesh_model_msg_init(msg, BT_MESH_MODEL_OP_GEN_LEVEL_STATUS);
+	net_buf_simple_add_le16(msg, (s16_t) get_current(LEVEL_TEMP));
+
+	if (state->transition->counter) {
+		calculate_rt(state->transition);
+		net_buf_simple_add_le16(msg, (s16_t) get_target(LEVEL_TEMP));
+		net_buf_simple_add_u8(msg, state->transition->rt);
+	}
+
+	err = bt_mesh_model_publish(model);
+	if (err) {
+		printk("bt_mesh_model_publish err %d\n", err);
+	}
+}
+
+static void gen_level_set_unack_temp(struct bt_mesh_model *model,
+				     struct bt_mesh_msg_ctx *ctx,
+				     struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	s16_t level;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	level = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LEVEL_TEMP, &level);
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(LEVEL_TEMP);
+	} else {
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+	}
+
+	state->transition->just_started = true;
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+static void gen_level_set_temp(struct bt_mesh_model *model,
+			       struct bt_mesh_msg_ctx *ctx,
+			       struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	s16_t level;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	level = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		gen_level_get_temp(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+	set_target(LEVEL_TEMP, &level);
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(LEVEL_TEMP);
+	} else {
+		gen_level_get_temp(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+	}
+
+	state->transition->just_started = true;
+	gen_level_get_temp(model, ctx, buf);
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+static void gen_delta_set_unack_temp(struct bt_mesh_model *model,
+				     struct bt_mesh_msg_ctx *ctx,
+				     struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	static s16_t last_level;
+	s32_t target, delta;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s32_t) net_buf_simple_pull_le32(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+
+		if (state->temp->delta == delta) {
+			return;
+		}
+		target = last_level + delta;
+
+	} else {
+		last_level = (s16_t) get_current(LEVEL_TEMP);
+		target = last_level + delta;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+
+	if (target < INT16_MIN) {
+		target = INT16_MIN;
+	} else if (target > INT16_MAX) {
+		target = INT16_MAX;
+	}
+
+	set_target(LEVEL_TEMP, &target);
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(LEVEL_TEMP);
+	} else {
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+	}
+
+	state->transition->just_started = true;
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+static void gen_delta_set_temp(struct bt_mesh_model *model,
+			       struct bt_mesh_msg_ctx *ctx,
+			       struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	static s16_t last_level;
+	s32_t target, delta;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s32_t) net_buf_simple_pull_le32(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+
+		if (state->temp->delta == delta) {
+			gen_level_get_temp(model, ctx, buf);
+			return;
+		}
+		target = last_level + delta;
+
+	} else {
+		last_level = (s16_t) get_current(LEVEL);
+		target = last_level + delta;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = NON_MOVE;
+
+	if (target < INT16_MIN) {
+		target = INT16_MIN;
+	} else if (target > INT16_MAX) {
+		target = INT16_MAX;
+	}
+
+	set_target(LEVEL_TEMP, &target);
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(LEVEL_TEMP);
+	} else {
+		gen_level_get_temp(model, ctx, buf);
+		return;
+	}
+
+	/* For Instantaneous Transition */
+	if (state->transition->counter == 0U) {
+		state->temp->current = state->temp->target;
+	}
+
+	state->transition->just_started = true;
+	gen_level_get_temp(model, ctx, buf);
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+static void gen_move_set_unack_temp(struct bt_mesh_model *model,
+				    struct bt_mesh_msg_ctx *ctx,
+				    struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	s16_t delta, target;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = MOVE;
+	state->temp->delta = delta;
+
+	if (delta < 0) {
+		target = INT16_MIN;
+		set_target(LEVEL_TEMP, &target);
+	} else if (delta > 0) {
+		target = INT16_MAX;
+		set_target(LEVEL_TEMP, &target);
+	} else if (delta == 0) {
+		state->temp->target = state->temp->current;
+	}
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(MOVE_LEVEL_TEMP);
+	} else {
+		return;
+	}
+
+	if (state->transition->counter == 0U) {
+		return;
+	}
+
+	state->transition->just_started = true;
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+static void gen_move_set_temp(struct bt_mesh_model *model,
+			      struct bt_mesh_msg_ctx *ctx,
+			      struct net_buf_simple *buf)
+{
+	u8_t tid, tt, delay;
+	s16_t delta, target;
+	s64_t now;
+	struct light_ctl_state *state = model->user_data;
+
+	delta = (s16_t) net_buf_simple_pull_le16(buf);
+	tid = net_buf_simple_pull_u8(buf);
+
+	now = k_uptime_get();
+	if (state->last_tid == tid &&
+	    state->last_src_addr == ctx->addr &&
+	    state->last_dst_addr == ctx->recv_dst &&
+	    (now - state->last_msg_timestamp <= K_SECONDS(6))) {
+		gen_level_get_temp(model, ctx, buf);
+		return;
+	}
+
+	switch (buf->len) {
+	case 0x00:      /* No optional fields are available */
+		tt = default_tt;
+		delay = 0U;
+		break;
+	case 0x02:      /* Optional fields are available */
+		tt = net_buf_simple_pull_u8(buf);
+		if ((tt & 0x3F) == 0x3F) {
+			return;
+		}
+
+		delay = net_buf_simple_pull_u8(buf);
+		break;
+	default:
+		return;
+	}
+
+	state->transition->counter = 0U;
+	k_timer_stop(&state->transition->timer);
+
+	state->last_tid = tid;
+	state->last_src_addr = ctx->addr;
+	state->last_dst_addr = ctx->recv_dst;
+	state->last_msg_timestamp = now;
+	state->transition->tt = tt;
+	state->transition->delay = delay;
+	state->transition->type = MOVE;
+	state->temp->delta = delta;
+
+	if (delta < 0) {
+		target = INT16_MIN;
+		set_target(LEVEL_TEMP, &target);
+	} else if (delta > 0) {
+		target = INT16_MAX;
+		set_target(LEVEL_TEMP, &target);
+	} else if (delta == 0) {
+		state->temp->target = state->temp->current;
+	}
+
+	if (state->temp->target != state->temp->current) {
+		set_transition_values(MOVE_LEVEL_TEMP);
+	} else {
+		gen_level_get_temp(model, ctx, buf);
+		return;
+	}
+
+	if (state->transition->counter == 0U) {
+		return;
+	}
+
+	state->transition->just_started = true;
+	gen_level_get_temp(model, ctx, buf);
+	gen_level_publish_temp(model);
+	level_temp_handler(state);
+}
+
+/* Generic Level (TEMPERATURE) Client message handlers */
+static void gen_level_status_temp(struct bt_mesh_model *model,
+				  struct bt_mesh_msg_ctx *ctx,
+				  struct net_buf_simple *buf)
+{
+	printk("Acknownledgement from GEN_LEVEL_SRV\n");
+	printk("Present Level = %04x\n", net_buf_simple_pull_le16(buf));
+
+	if (buf->len == 3U) {
+		printk("Target Level = %04x\n", net_buf_simple_pull_le16(buf));
+		printk("Remaining Time = %02x\n", net_buf_simple_pull_u8(buf));
+	}
+}
+
 
 /* message handlers (End) */
 
@@ -1658,19 +2905,19 @@ static const struct bt_mesh_model_op gen_onoff_cli_op[] = {
 	BT_MESH_MODEL_OP_END,
 };
 
-/* Mapping of message handlers for Generic Levl Server (0x1002) */
+/* Mapping of message handlers for Generic Level (Light) Server (0x1002) */
 static const struct bt_mesh_model_op gen_level_srv_op[] = {
 	{ BT_MESH_MODEL_OP_2(0x82, 0x05), 0, gen_level_get },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x06), 3, gen_level_set },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x07), 3, gen_level_set_unack },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x09), 5, gen_delta_set },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x0A), 5, gen_delta_set_unack },
-	{ BT_MESH_MODEL_OP_2(0x82, 0x0B), 5, gen_move_set },
-	{ BT_MESH_MODEL_OP_2(0x82, 0x0C), 5, gen_move_set_unack },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x0B), 3, gen_move_set },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x0C), 3, gen_move_set_unack },
 	BT_MESH_MODEL_OP_END,
 };
 
-/* Mapping of message handlers for Generic Level Client (0x1003) */
+/* Mapping of message handlers for Generic Level (Light) Client (0x1003) */
 static const struct bt_mesh_model_op gen_level_cli_op[] = {
 	{ BT_MESH_MODEL_OP_2(0x82, 0x08), 2, gen_level_status },
 	BT_MESH_MODEL_OP_END,
@@ -1747,8 +2994,8 @@ static const struct bt_mesh_model_op light_lightness_cli_op[] = {
 /* Mapping of message handlers for Light CTL Server (0x1303) */
 static const struct bt_mesh_model_op light_ctl_srv_op[] = {
 	{ BT_MESH_MODEL_OP_2(0x82, 0x5D), 0, light_ctl_get },
-	{ BT_MESH_MODEL_OP_2(0x82, 0x5E), 5, light_ctl_set },
-	{ BT_MESH_MODEL_OP_2(0x82, 0x5F), 5, light_ctl_set_unack },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x5E), 7, light_ctl_set },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x5F), 7, light_ctl_set_unack },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x62), 0, light_ctl_temp_range_get },
 	{ BT_MESH_MODEL_OP_2(0x82, 0x67), 0, light_ctl_default_get },
 	BT_MESH_MODEL_OP_END,
@@ -1782,10 +3029,28 @@ static const struct bt_mesh_model_op light_ctl_temp_srv_op[] = {
 
 /* Mapping of message handlers for Vendor (0x4321) */
 static const struct bt_mesh_model_op vnd_ops[] = {
-	{ BT_MESH_MODEL_OP_3(0x00, CID_ZEPHYR), 0, vnd_get },
-	{ BT_MESH_MODEL_OP_3(0x01, CID_ZEPHYR), 3, vnd_set },
-	{ BT_MESH_MODEL_OP_3(0x02, CID_ZEPHYR), 3, vnd_set_unack },
-	{ BT_MESH_MODEL_OP_3(0x03, CID_ZEPHYR), 6, vnd_status },
+	{ BT_MESH_MODEL_OP_3(0x01, CID_ZEPHYR), 0, vnd_get },
+	{ BT_MESH_MODEL_OP_3(0x02, CID_ZEPHYR), 3, vnd_set },
+	{ BT_MESH_MODEL_OP_3(0x03, CID_ZEPHYR), 3, vnd_set_unack },
+	{ BT_MESH_MODEL_OP_3(0x04, CID_ZEPHYR), 6, vnd_status },
+	BT_MESH_MODEL_OP_END,
+};
+
+/* Mapping of message handlers for Generic Level (Temp.) Server (0x1002) */
+static const struct bt_mesh_model_op gen_level_srv_op_temp[] = {
+	{ BT_MESH_MODEL_OP_2(0x82, 0x05), 0, gen_level_get_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x06), 3, gen_level_set_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x07), 3, gen_level_set_unack_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x09), 5, gen_delta_set_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x0A), 5, gen_delta_set_unack_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x0B), 3, gen_move_set_temp },
+	{ BT_MESH_MODEL_OP_2(0x82, 0x0C), 3, gen_move_set_unack_temp },
+	BT_MESH_MODEL_OP_END,
+};
+
+/* Mapping of message handlers for Generic Level (Temp.) Client (0x1003) */
+static const struct bt_mesh_model_op gen_level_cli_op_temp[] = {
+	{ BT_MESH_MODEL_OP_2(0x82, 0x08), 2, gen_level_status_temp },
 	BT_MESH_MODEL_OP_END,
 };
 
@@ -1795,14 +3060,14 @@ struct bt_mesh_model root_models[] = {
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV,
 		      gen_onoff_srv_op, &gen_onoff_srv_pub_root,
-		      &gen_onoff_srv_root_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI,
 		      gen_onoff_cli_op, &gen_onoff_cli_pub_root,
 		      NULL),
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_LEVEL_SRV,
 		      gen_level_srv_op, &gen_level_srv_pub_root,
-		      &gen_level_srv_root_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_LEVEL_CLI,
 		      gen_level_cli_op, &gen_level_cli_pub_root,
 		      NULL),
@@ -1810,7 +3075,7 @@ struct bt_mesh_model root_models[] = {
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_DEF_TRANS_TIME_SRV,
 		      gen_def_trans_time_srv_op,
 		      &gen_def_trans_time_srv_pub,
-		      &gen_def_trans_time_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_DEF_TRANS_TIME_CLI,
 		      gen_def_trans_time_cli_op,
 		      &gen_def_trans_time_cli_pub,
@@ -1818,32 +3083,32 @@ struct bt_mesh_model root_models[] = {
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_POWER_ONOFF_SRV,
 		      gen_power_onoff_srv_op, &gen_power_onoff_srv_pub,
-		      &gen_power_onoff_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_POWER_ONOFF_SETUP_SRV,
 		      gen_power_onoff_setup_srv_op,
 		      &gen_power_onoff_srv_pub,
-		      &gen_power_onoff_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_POWER_ONOFF_CLI,
 		      gen_power_onoff_cli_op, &gen_power_onoff_cli_pub,
 		      NULL),
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_LIGHTNESS_SRV,
 		      light_lightness_srv_op, &light_lightness_srv_pub,
-		      &light_lightness_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_LIGHTNESS_SETUP_SRV,
 		      light_lightness_setup_srv_op,
 		      &light_lightness_srv_pub,
-		      &light_lightness_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_LIGHTNESS_CLI,
 		      light_lightness_cli_op, &light_lightness_cli_pub,
 		      NULL),
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_CTL_SRV,
 		      light_ctl_srv_op, &light_ctl_srv_pub,
-		      &light_ctl_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_CTL_SETUP_SRV,
 		      light_ctl_setup_srv_op, &light_ctl_srv_pub,
-		      &light_ctl_srv_user_data),
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_CTL_CLI,
 		      light_ctl_cli_op, &light_ctl_cli_pub,
 		      NULL),
@@ -1855,23 +3120,16 @@ struct bt_mesh_model vnd_models[] = {
 };
 
 struct bt_mesh_model s0_models[] = {
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_SRV,
-		      gen_onoff_srv_op, &gen_onoff_srv_pub_s0,
-		      &gen_onoff_srv_s0_user_data),
-	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_ONOFF_CLI,
-		      gen_onoff_cli_op, &gen_onoff_cli_pub_s0,
-		      NULL),
-
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_LEVEL_SRV,
-		      gen_level_srv_op, &gen_level_srv_pub_s0,
-		      &gen_level_srv_s0_user_data),
+		      gen_level_srv_op_temp, &gen_level_srv_pub_s0,
+		      ctl),
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_GEN_LEVEL_CLI,
-		      gen_level_cli_op, &gen_level_cli_pub_s0,
+		      gen_level_cli_op_temp, &gen_level_cli_pub_s0,
 		      NULL),
 
 	BT_MESH_MODEL(BT_MESH_MODEL_ID_LIGHT_CTL_TEMP_SRV,
 		      light_ctl_temp_srv_op, &light_ctl_srv_pub,
-		      &light_ctl_srv_user_data),
+		      ctl),
 };
 
 static struct bt_mesh_elem elements[] = {

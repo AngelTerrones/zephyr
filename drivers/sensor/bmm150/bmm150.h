@@ -6,22 +6,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _SENSOR_BMM150_H_
-#define _SENSOR_BMM150_H_
+#ifndef ZEPHYR_DRIVERS_SENSOR_BMM150_BMM150_H_
+#define ZEPHYR_DRIVERS_SENSOR_BMM150_BMM150_H_
 
 
 #include <zephyr/types.h>
-#include <i2c.h>
+#include <drivers/i2c.h>
 #include <stdint.h>
-#include <misc/util.h>
+#include <sys/util.h>
 
 #include <kernel.h>
 #include <device.h>
-#include <sensor.h>
-#include <misc/byteorder.h>
-#include <misc/__assert.h>
-#include <gpio.h>
-
+#include <drivers/sensor.h>
+#include <sys/byteorder.h>
+#include <sys/__assert.h>
+#include <drivers/gpio.h>
 
 #define BMM150_REG_CHIP_ID         0x40
 #define BMM150_CHIP_ID_VAL         0x32
@@ -83,7 +82,7 @@
 #define BMM150_MASK_DRDY_LATCHING          BIT(1)
 #define BMM150_MASK_DRDY_INT3_POLARITY     BIT(0)
 
-#define BMM150_I2C_ADDR                    CONFIG_BMM150_I2C_ADDR
+#define BMM150_I2C_ADDR                    DT_INST_0_BOSCH_BMM150_BASE_ADDRESS
 
 #if defined(CONFIG_BMM150_SAMPLING_REP_XY) || \
 	defined(CONFIG_BMM150_SAMPLING_REP_Z)
@@ -158,7 +157,4 @@ enum bmm150_presets {
 	#define BMM150_DEFAULT_PRESET BMM150_HIGH_ACCURACY_PRESET
 #endif
 
-#define SYS_LOG_DOMAIN "BMM150"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_SENSOR_LEVEL
-#include <logging/sys_log.h>
 #endif /* __SENSOR_BMM150_H__ */

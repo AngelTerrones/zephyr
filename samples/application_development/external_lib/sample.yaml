@@ -1,7 +1,7 @@
 sample:
   name: External Library
 tests:
-  test:
+  sample.app_dev.external_lib:
     tags: external
     harness: console
     harness_config:

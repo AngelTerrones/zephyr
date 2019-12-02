@@ -3,16 +3,30 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef __POSIX_TIME_H__
-#define __POSIX_TIME_H__
+#ifndef ZEPHYR_INCLUDE_POSIX_TIME_H_
+#define ZEPHYR_INCLUDE_POSIX_TIME_H_
+
+#ifdef CONFIG_NEWLIB_LIBC
+/* Kludge to support outdated newlib version as used in SDK 0.10 for Xtensa */
+#include <newlib.h>
+
+#ifdef __NEWLIB__
+/* Newever Newlib 3.x+ */
+#include <sys/timespec.h>
+#else /* __NEWLIB__ */
+/* Workaround for older Newlib 2.x, as used by Xtensa. It lacks sys/_timeval.h,
+ * so mimic it here.
+ */
+#include <sys/types.h>
+#ifndef __timespec_defined
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct timespec {
-	signed int  tv_sec;
-	signed int  tv_nsec;
+	time_t tv_sec;
+	long tv_nsec;
 };
 
 struct itimerspec {
@@ -20,17 +34,33 @@ struct itimerspec {
 	struct timespec it_value;     /* Timer expiration */
 };
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __timespec_defined */
+#endif /* __NEWLIB__ */
+
+#else /* CONFIG_NEWLIB_LIBC */
+/* Not Newlib */
+#include <sys/timespec.h>
+#endif /* CONFIG_NEWLIB_LIBC */
+
 #include <kernel.h>
 #include <errno.h>
-#include "sys/types.h"
-#include "signal.h"
+#include "posix_types.h"
+#include <posix/signal.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef CLOCK_REALTIME
-#define CLOCK_REALTIME 0
+#define CLOCK_REALTIME 1
 #endif
 
 #ifndef CLOCK_MONOTONIC
-#define CLOCK_MONOTONIC 1
+#define CLOCK_MONOTONIC 4
 #endif
 
 #define NSEC_PER_MSEC (NSEC_PER_USEC * USEC_PER_MSEC)
@@ -44,18 +74,8 @@ static inline s32_t _ts_to_ms(const struct timespec *to)
 	return (to->tv_sec * MSEC_PER_SEC) + (to->tv_nsec / NSEC_PER_MSEC);
 }
 
-/**
- * @brief Set clock time.
- *
- * See IEEE 1003.1
- */
-static inline int clock_settime(clockid_t clock_id, const struct timespec *ts)
-{
-	errno = ENOSYS;
-	return -1;
-}
-
 int clock_gettime(clockid_t clock_id, struct timespec *ts);
+int clock_settime(clockid_t clock_id, const struct timespec *ts);
 /* Timer APIs */
 int timer_create(clockid_t clockId, struct sigevent *evp, timer_t *timerid);
 int timer_delete(timer_t timerid);
@@ -67,4 +87,4 @@ int timer_settime(timer_t timerid, int flags, const struct itimerspec *value,
 }
 #endif
 
-#endif /* __POSIX_TIME_H__ */
+#endif /* ZEPHYR_INCLUDE_POSIX_TIME_H_ */

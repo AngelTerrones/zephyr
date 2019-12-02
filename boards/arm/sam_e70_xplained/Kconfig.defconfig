@@ -1,18 +1,14 @@
-# Kconfig - Atmel SMART SAM E70 Xplained Board configuration
-#
+# Atmel SMART SAM E70 Xplained Board configuration
+
 # Copyright (c) 2016 Piotr Mienkowski
 # SPDX-License-Identifier: Apache-2.0
-#
 
 if BOARD_SAM_E70_XPLAINED
 
 config BOARD
-	string
 	default "sam_e70_xplained"
 
 if I2S
-config I2S_SAM_SSC
-	default y
 
 config I2S_SAM_SSC_0_DMA_RX_CHANNEL
 	default 22
@@ -30,31 +26,30 @@ choice ETH_SAM_GMAC_MAC_SELECT
 endchoice
 
 config ETH_SAM_GMAC_MAC_I2C_SLAVE_ADDRESS
-	hex
 	default 0x5F
 
 config ETH_SAM_GMAC_MAC_I2C_INT_ADDRESS
-	hex
 	default 0x9A
 
 config ETH_SAM_GMAC_MAC_I2C_INT_ADDRESS_SIZE
-	int
 	default 1
 
 config ETH_SAM_GMAC_MAC_I2C_DEV_NAME
-	string
 	default "I2C_0"
 
 config ETH_SAM_GMAC_MAC_I2C_EEPROM
-	bool
 	select I2C
 
 endif # ETH_SAM_GMAC
 
-if I2C
+if ADC
 
-config I2C_SAM_TWIHS
+config ADC_0
 	default y
+
+endif # ADC
+
+if I2C
 
 config I2C_0
 	default y
@@ -64,11 +59,22 @@ endif # I2C
 if NETWORKING
 
 config NET_L2_ETHERNET
-	def_bool y
+	default y
 
 config ETH_SAM_GMAC
-	def_bool y if NET_L2_ETHERNET
+	default y if NET_L2_ETHERNET
 
 endif # NETWORKING
+
+if SPI
+
+if SPI_SAM_PORT_0
+
+config SPI_SAME70_PORT_0_PIN_CS3
+	default y
+
+endif # SPI_SAM_PORT_0
+
+endif # SPI
 
 endif # BOARD_SAM_E70_XPLAINED

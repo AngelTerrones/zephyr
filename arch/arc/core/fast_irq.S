@@ -16,18 +16,12 @@
 #include <kernel_structs.h>
 #include <offsets_short.h>
 #include <toolchain.h>
+#include <linker/sections.h>
 #include <arch/cpu.h>
 #include <swap_macros.h>
 
 GTEXT(_firq_enter)
 GTEXT(_firq_exit)
-
-GDATA(exc_nest_count)
-#if CONFIG_RGF_NUM_BANKS == 1
-GDATA(saved_r0)
-#else
-GDATA(saved_sp)
-#endif
 
 /**
  *
@@ -60,12 +54,10 @@ SECTION_FUNC(TEXT, _firq_enter)
  * This has already been done by _isr_wrapper.
  */
 #ifdef CONFIG_ARC_STACK_CHECKING
-#ifdef CONFIG_ARC_HAS_SECURE
+#ifdef CONFIG_ARC_SECURE_FIRMWARE
 	lr r2, [_ARC_V2_SEC_STAT]
 	bclr r2, r2, _ARC_V2_SEC_STAT_SSC_BIT
-	/* sflag r2 */
-	/* sflag instruction is not supported in current ARC GNU */
-	.long 0x00bf302f
+	sflag r2
 #else
 	/* disable stack checking */
 	lr r2, [_ARC_V2_STATUS32]
@@ -75,7 +67,6 @@ SECTION_FUNC(TEXT, _firq_enter)
 #endif
 
 #if CONFIG_RGF_NUM_BANKS != 1
-#ifndef CONFIG_FIRQ_NO_LPCC
 	/*
 	 * Save LP_START/LP_COUNT/LP_END because called handler might use.
 	 * Save these in callee saved registers to avoid using memory.
@@ -85,34 +76,51 @@ SECTION_FUNC(TEXT, _firq_enter)
 	lr r24, [_ARC_V2_LP_START]
 	lr r25, [_ARC_V2_LP_END]
 #endif
-#endif
 
-	ld r1, [exc_nest_count]
-	add r0, r1, 1
-	st r0, [exc_nest_count]
-	cmp r1, 0
+	/* check whether irq stack is used */
+	_check_and_inc_int_nest_counter r0, r1
 
-	bgt.d  firq_nest
-	mov r0, sp
+	bne.d firq_nest
+	mov_s r0, sp
 
-	mov r1, _kernel
-	ld sp, [r1, _kernel_offset_to_irq_stack]
+	_get_curr_cpu_irq_stack sp
 #if CONFIG_RGF_NUM_BANKS != 1
 	b firq_nest_1
 firq_nest:
-	mov r1, ilink
-	lr r0, [_ARC_V2_STATUS32]
-	and r0, r0, ~_ARC_V2_STATUS32_RB(7)
-	kflag r0
+	/*
+	 * because firq and rirq share the same interrupt stack,
+	 * switch back to original register bank to get correct sp.
+	 * to get better firq latency, an approach is to prepare
+	 * separate interrupt stack for firq and do not do thread
+	 * switch in firq.
+	 */
+	lr r1, [_ARC_V2_STATUS32]
+	and r1, r1, ~_ARC_V2_STATUS32_RB(7)
+	kflag r1
 
-	st sp, [saved_sp]
+	/* here use _ARC_V2_USER_SP and ilink to exchange sp
+	 * save original value of _ARC_V2_USER_SP and ilink into
+	 * the stack of interrupted context first, then restore them later
+	 */
+	push ilink
+	PUSHAX ilink, _ARC_V2_USER_SP
 
+	/* sp here is the sp of interrupted context */
+	sr sp, [_ARC_V2_USER_SP]
+	/* here, bank 0 sp must go back to the value before push and
+	 * PUSHAX as we will switch to bank1, the pop and POPAX later will
+	 * change bank1's sp, not bank0's sp
+	 */
+	add sp, sp, 8
+
+	/* switch back to banked reg, only ilink can be used */
 	lr ilink, [_ARC_V2_STATUS32]
 	or ilink, ilink, _ARC_V2_STATUS32_RB(1)
 	kflag ilink
-	mov r0, sp
-	ld sp, [saved_sp]
-	mov ilink, r1
+	lr sp, [_ARC_V2_USER_SP]
+
+	POPAX ilink, _ARC_V2_USER_SP
+	pop ilink
 firq_nest_1:
 #else
 firq_nest:
@@ -132,35 +140,35 @@ firq_nest:
 SECTION_FUNC(TEXT, _firq_exit)
 
 #if CONFIG_RGF_NUM_BANKS != 1
-#ifndef CONFIG_FIRQ_NO_LPCC
 	/* restore lp_count, lp_start, lp_end from r23-r25 */
 	mov lp_count,r23
 	sr r24, [_ARC_V2_LP_START]
 	sr r25, [_ARC_V2_LP_END]
 #endif
-#endif
-	/* check if we're a nested interrupt: if so, let the interrupted
-	 * interrupt handle the reschedule */
-	mov	r1, exc_nest_count
-	ld	r0, [r1]
-	sub	r0, r0, 1
-	cmp	r0, 0
-	bne.d	_firq_no_reschedule
-	st	r0, [r1]
+	_dec_int_nest_counter r0, r1
+
+	_check_nest_int_by_irq_act r0, r1
+
+	jne _firq_no_reschedule
 
 #ifdef CONFIG_STACK_SENTINEL
-	bl _check_stack_sentinel
+	bl z_check_stack_sentinel
 #endif
 
 #ifdef CONFIG_PREEMPT_ENABLED
 
+#ifdef CONFIG_SMP
+	bl z_arc_smp_switch_in_isr
+	/* r0 points to new thread, r1 points to old thread */
+	brne r0, 0, _firq_reschedule
+#else
 	mov_s r1, _kernel
 	ld_s r2, [r1, _kernel_offset_to_current]
 
 	/* Check if the current thread (in r2) is the cached thread */
 	ld_s r0, [r1, _kernel_offset_to_ready_q_cache]
 	brne r0, r2, _firq_reschedule
-
+#endif
 	/* fall to no rescheduling */
 
 #endif /* CONFIG_PREEMPT_ENABLED */
@@ -174,37 +182,7 @@ _firq_no_reschedule:
 	 * instruction instead of a pair of cmp and bxx
 	 */
 #if CONFIG_RGF_NUM_BANKS == 1
-	add sp,sp,4 /* don't need r0 from stack */
-	pop_s r1
-	pop_s r2
-	pop_s r3
-	pop r4
-	pop r5
-	pop r6
-	pop r7
-	pop r8
-	pop r9
-	pop r10
-	pop r11
-	pop_s r12
-	pop_s r13
-	pop_s blink
-	pop_s r0
-	sr r0, [_ARC_V2_LP_END]
-	pop_s r0
-	sr r0, [_ARC_V2_LP_START]
-	pop_s r0
-	mov lp_count,r0
-#ifdef CONFIG_CODE_DENSITY
-	pop_s r0
-	sr r0, [_ARC_V2_EI_BASE]
-	pop_s r0
-	sr r0, [_ARC_V2_LDI_BASE]
-	pop_s r0
-	sr r0, [_ARC_V2_JLI_BASE]
-#endif
-	ld r0,[saved_r0]
-	add sp,sp,8 /* don't need ilink & status32_po from stack */
+	_pop_irq_stack_frame
 #endif
 	rtie
 
@@ -215,6 +193,15 @@ _firq_reschedule:
 	pop sp
 
 #if CONFIG_RGF_NUM_BANKS != 1
+#ifdef CONFIG_SMP
+/*
+ * save r0, r1 in irq stack for a while, as they will be changed by register
+ * bank switch
+ */
+	_get_curr_cpu_irq_stack r2
+	st r0, [r2, -4]
+	st r1, [r2, -8]
+#endif
 	/*
 	 * We know there is no interrupted interrupt of lower priority at this
 	 * point, so when switching back to register bank 0, it will contain the
@@ -238,17 +225,32 @@ _firq_reschedule:
 	st_s r0, [sp, ___isf_t_status32_OFFSET]
 
 	st ilink, [sp, ___isf_t_pc_OFFSET] /* ilink into pc */
+#ifdef CONFIG_SMP
+/*
+ * load r0, r1 from irq stack
+ */
+	_get_curr_cpu_irq_stack r2
+	ld r0, [r2, -4]
+	ld r1, [r2, -8]
+#endif
 #endif
 
+#ifdef CONFIG_SMP
+	mov_s r2, r1
+#else
 	mov_s r1, _kernel
 	ld_s r2, [r1, _kernel_offset_to_current]
-
+#endif
 	_save_callee_saved_regs
 
 	st _CAUSE_FIRQ, [r2, _thread_offset_to_relinquish_cause]
 
+#ifdef CONFIG_SMP
+	mov_s r2, r0
+#else
 	ld_s r2, [r1, _kernel_offset_to_ready_q_cache]
 	st_s r2, [r1, _kernel_offset_to_current]
+#endif
 
 #ifdef CONFIG_ARC_STACK_CHECKING
 	_load_stack_check_regs
@@ -261,43 +263,37 @@ _firq_reschedule:
 
 #if defined(CONFIG_MPU_STACK_GUARD) || defined(CONFIG_USERSPACE)
 	push_s r2
-	mov r0, r2
+	mov_s r0, r2
 	bl configure_mpu_thread
 	pop_s r2
 #endif
 
-	ld_s r3, [r2, _thread_offset_to_relinquish_cause]
+#if defined(CONFIG_USERSPACE)
+/*
+ * see comments in regular_irq.S
+ */
+	lr r0, [_ARC_V2_AUX_IRQ_ACT]
+	bclr r0, r0, 31
+	sr r0, [_ARC_V2_AUX_IRQ_ACT]
+#endif
+	ld r3, [r2, _thread_offset_to_relinquish_cause]
 
 	breq r3, _CAUSE_RIRQ, _firq_return_from_rirq
-	nop
+	nop_s
 	breq r3, _CAUSE_FIRQ, _firq_return_from_firq
-	nop
+	nop_s
 
 	/* fall through */
 
 .balign 4
 _firq_return_from_coop:
-
-	ld_s r3, [r2, _thread_offset_to_intlock_key]
-	st  0, [r2, _thread_offset_to_intlock_key]
-
 	/* pc into ilink */
 	pop_s r0
-	mov ilink, r0
+	mov_s ilink, r0
 
 	pop_s r0 /* status32 into r0 */
-	/*
-	 * There are only two interrupt lock states: locked and unlocked. When
-	 * entering _Swap(), they are always locked, so the IE bit is unset in
-	 * status32. If the incoming thread had them locked recursively, it
-	 * means that the IE bit should stay unset. The only time the bit
-	 * has to change is if they were not locked recursively.
-	 */
-	and.f r3, r3, (1 << 4)
-	or.nz r0, r0, _ARC_V2_STATUS32_IE
 	sr r0, [_ARC_V2_STATUS32_P0]
 
-	ld_s r0, [r2, _thread_offset_to_return_value]
 	rtie
 
 .balign 4

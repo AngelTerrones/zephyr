@@ -8,11 +8,14 @@
 
 #include <kernel.h>
 #include <init.h>
-#include <i2c.h>
-#include <sensor.h>
-#include <misc/__assert.h>
+#include <drivers/i2c.h>
+#include <drivers/sensor.h>
+#include <sys/__assert.h>
+#include <logging/log.h>
 
 #include "isl29035.h"
+
+LOG_MODULE_REGISTER(ISL29035, CONFIG_SENSOR_LOG_LEVEL);
 
 static int isl29035_sample_fetch(struct device *dev, enum sensor_channel chan)
 {
@@ -47,7 +50,7 @@ static int isl29035_channel_get(struct device *dev,
 	/* val = sample_val * lux_range / (2 ^ adc_data_bits) */
 	tmp = (u64_t)drv_data->data_sample * ISL29035_LUX_RANGE;
 	val->val1 = tmp >> ISL29035_ADC_DATA_BITS;
-	tmp = (tmp & ISL29035_ADC_DATA_MASK) * 1000000;
+	tmp = (tmp & ISL29035_ADC_DATA_MASK) * 1000000U;
 	val->val2 = tmp >> ISL29035_ADC_DATA_BITS;
 #elif CONFIG_ISL29035_MODE_IR
 	ARG_UNUSED(tmp);
@@ -71,31 +74,31 @@ static int isl29035_init(struct device *dev)
 {
 	struct isl29035_driver_data *drv_data = dev->driver_data;
 
-	drv_data->i2c = device_get_binding(CONFIG_ISL29035_I2C_MASTER_DEV_NAME);
+	drv_data->i2c = device_get_binding(DT_INST_0_ISIL_ISL29035_BUS_NAME);
 	if (drv_data->i2c == NULL) {
-		SYS_LOG_DBG("Failed to get I2C device.");
+		LOG_DBG("Failed to get I2C device.");
 		return -EINVAL;
 	}
 
-	drv_data->data_sample = 0;
+	drv_data->data_sample = 0U;
 
 	/* clear blownout status bit */
 	if (i2c_reg_update_byte(drv_data->i2c, ISL29035_I2C_ADDRESS,
 				ISL29035_ID_REG, ISL29035_BOUT_MASK, 0) < 0) {
-		SYS_LOG_DBG("Failed to clear blownout status bit.");
+		LOG_DBG("Failed to clear blownout status bit.");
 		return -EIO;
 	}
 
 	/* set command registers to set default attributes */
 	if (i2c_reg_write_byte(drv_data->i2c, ISL29035_I2C_ADDRESS,
 			       ISL29035_COMMAND_I_REG, 0) < 0) {
-		SYS_LOG_DBG("Failed to clear COMMAND-I.");
+		LOG_DBG("Failed to clear COMMAND-I.");
 		return -EIO;
 	}
 
 	if (i2c_reg_write_byte(drv_data->i2c, ISL29035_I2C_ADDRESS,
 				 ISL29035_COMMAND_II_REG, 0) < 0) {
-		SYS_LOG_DBG("Failed to clear COMMAND-II.");
+		LOG_DBG("Failed to clear COMMAND-II.");
 		return -EIO;
 	}
 
@@ -104,7 +107,7 @@ static int isl29035_init(struct device *dev)
 				  ISL29035_COMMAND_I_REG,
 				  ISL29035_OPMODE_MASK,
 				  ISL29035_ACTIVE_OPMODE_BITS) < 0) {
-		SYS_LOG_DBG("Failed to set opmode.");
+		LOG_DBG("Failed to set opmode.");
 		return -EIO;
 	}
 
@@ -113,7 +116,7 @@ static int isl29035_init(struct device *dev)
 				ISL29035_COMMAND_II_REG,
 				ISL29035_LUX_RANGE_MASK,
 				ISL29035_LUX_RANGE_BITS) < 0) {
-		SYS_LOG_DBG("Failed to set lux range.");
+		LOG_DBG("Failed to set lux range.");
 		return -EIO;
 	}
 
@@ -122,13 +125,13 @@ static int isl29035_init(struct device *dev)
 				ISL29035_COMMAND_II_REG,
 				ISL29035_ADC_RES_MASK,
 				ISL29035_ADC_RES_BITS) < 0) {
-		SYS_LOG_DBG("Failed to set ADC resolution.");
+		LOG_DBG("Failed to set ADC resolution.");
 		return -EIO;
 	}
 
 #ifdef CONFIG_ISL29035_TRIGGER
 	if (isl29035_init_interrupt(dev) < 0) {
-		SYS_LOG_DBG("Failed to initialize interrupt.");
+		LOG_DBG("Failed to initialize interrupt.");
 		return -EIO;
 	}
 #endif
@@ -138,6 +141,6 @@ static int isl29035_init(struct device *dev)
 
 struct isl29035_driver_data isl29035_data;
 
-DEVICE_AND_API_INIT(isl29035_dev, CONFIG_ISL29035_NAME, &isl29035_init,
+DEVICE_AND_API_INIT(isl29035_dev, DT_INST_0_ISIL_ISL29035_LABEL, &isl29035_init,
 		    &isl29035_data, NULL, POST_KERNEL,
 		    CONFIG_SENSOR_INIT_PRIORITY, &isl29035_api);

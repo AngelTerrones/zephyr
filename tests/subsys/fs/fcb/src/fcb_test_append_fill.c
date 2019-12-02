@@ -32,7 +32,7 @@ void fcb_test_append_fill(void)
 
 	while (1) {
 		rc = fcb_append(fcb, sizeof(test_data), &loc);
-		if (rc == FCB_ERR_NOSPACE) {
+		if (rc == -ENOSPC) {
 			break;
 		}
 		if (loc.fe_sector == &test_fcb_sector[0]) {
@@ -56,7 +56,7 @@ void fcb_test_append_fill(void)
 	zassert_true(elem_cnts[0] == elem_cnts[1],
 		     "appendend counts should equal to each other");
 
-	memset(&aa_together_cnts, 0, sizeof(aa_together_cnts));
+	(void)memset(&aa_together_cnts, 0, sizeof(aa_together_cnts));
 	rc = fcb_walk(fcb, NULL, fcb_test_cnt_elems_cb, &aa_together);
 	zassert_true(rc == 0, "fcb_walk call failure");
 	zassert_true(aa_together.elem_cnts[0] == elem_cnts[0],
@@ -64,7 +64,7 @@ void fcb_test_append_fill(void)
 	zassert_true(aa_together.elem_cnts[1] == elem_cnts[1],
 		     "fcb_walk: elements count read different than expected");
 
-	memset(&aa_separate_cnts, 0, sizeof(aa_separate_cnts));
+	(void)memset(&aa_separate_cnts, 0, sizeof(aa_separate_cnts));
 	rc = fcb_walk(fcb, &test_fcb_sector[0], fcb_test_cnt_elems_cb,
 	  &aa_separate);
 	zassert_true(rc == 0, "fcb_walk call failure");

@@ -1,4 +1,51 @@
-include(${ZEPHYR_BASE}/cmake/host-tools-zephyr.cmake)
+# SPDX-License-Identifier: Apache-2.0
+
+include(${ZEPHYR_BASE}/cmake/toolchain/zephyr/host-tools.cmake)
+
+# west is optional
+find_program(
+  WEST
+  west
+  )
+if(${WEST} STREQUAL WEST-NOTFOUND)
+  unset(WEST)
+else()
+  # If west is found, make sure its version matches the minimum
+  # required one.
+  set(MIN_WEST_VERSION 0.6.0)
+  execute_process(
+    COMMAND
+    ${PYTHON_EXECUTABLE}
+    -c
+    "import west.version; print(west.version.__version__, end='')"
+    OUTPUT_VARIABLE west_version
+    RESULT_VARIABLE west_version_output_result
+    )
+
+  if(west_version_output_result)
+    message(FATAL_ERROR "Unable to import west.version from '${PYTHON_EXECUTABLE}'")
+  endif()
+
+  if(${west_version} VERSION_LESS ${MIN_WEST_VERSION})
+    message(FATAL_ERROR "The detected west version is unsupported.\n\
+  The version was found to be ${west_version}:\n\
+    ${item}\n\
+  But the minimum supported version is ${MIN_WEST_VERSION}\n\
+  Please upgrade with:\n\
+      pip3 install --upgrade west")
+  endif()
+  # Just output information for a single version. This will still work
+  # even after output is one line.
+  message(STATUS "Found west: ${WEST} (found suitable version \"${west_version}\", minimum required is \"${MIN_WEST_VERSION}\")")
+
+  if (${west_version} VERSION_GREATER_EQUAL "0.7.0")
+    execute_process(
+      COMMAND ${WEST}  topdir
+      OUTPUT_VARIABLE  WEST_TOPDIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+  endif()
+endif()
 
 # Search for the must-have program dtc on PATH and in
 # TOOLCHAIN_HOME. Usually DTC will be provided by an SDK, but for
@@ -10,6 +57,23 @@ find_program(
   )
 if(${DTC} STREQUAL DTC-NOTFOUND)
   message(FATAL_ERROR "Unable to find dtc")
+endif()
+
+# Parse the 'dtc --version' and make sure it is at least MIN_DTC_VERSION
+set(MIN_DTC_VERSION 1.4.6)
+execute_process(
+  COMMAND
+  ${DTC} --version
+  OUTPUT_VARIABLE dtc_version_output
+  )
+string(REGEX MATCH "Version: DTC ([0-9]+\.[0-9]+.[0-9]+).*" out_var ${dtc_version_output})
+if(${CMAKE_MATCH_1} VERSION_LESS ${MIN_DTC_VERSION})
+  assert(0 "The detected dtc version is unsupported.                                 \n\
+    The version was found to be ${CMAKE_MATCH_1}                                   \n\
+    But the minimum supported version is ${MIN_DTC_VERSION}                        \n\
+    See https://docs.zephyrproject.org/latest/getting_started/                     \n\
+    for how to use the SDK's dtc alongside a custom toolchain."
+  )
 endif()
 
 find_program(

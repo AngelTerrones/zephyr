@@ -5,10 +5,12 @@ arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
+  - xtools
 supported:
-  - ieee802154
   - adc
-  - i2c
-  - spi
+  - counter
   - gpio
-  - rtc
+  - hwinfo
+  - i2c
+  - ieee802154
+  - spi

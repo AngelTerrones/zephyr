@@ -5,11 +5,14 @@
  */
 
 #include <device.h>
-#include <gpio.h>
-#include <misc/util.h>
+#include <drivers/gpio.h>
+#include <sys/util.h>
 #include <kernel.h>
-#include <sensor.h>
+#include <drivers/sensor.h>
 #include "adxl372.h"
+
+#include <logging/log.h>
+LOG_MODULE_DECLARE(ADXL372, CONFIG_SENSOR_LOG_LEVEL);
 
 static void adxl372_thread_cb(void *arg)
 {
@@ -109,7 +112,7 @@ int adxl372_trigger_set(struct device *dev,
 		int_mask = ADXL372_INT1_MAP_DATA_RDY_MSK;
 		break;
 	default:
-		SYS_LOG_ERR("Unsupported sensor trigger");
+		LOG_ERR("Unsupported sensor trigger");
 		ret = -ENOTSUP;
 		goto out;
 	}
@@ -117,8 +120,8 @@ int adxl372_trigger_set(struct device *dev,
 	if (handler) {
 		int_en = int_mask;
 	} else {
-		int_en = 0;
-	};
+		int_en = 0U;
+	}
 
 	ret = adxl372_reg_write_mask(dev, ADXL372_INT1_MAP, int_mask, int_en);
 
@@ -136,7 +139,7 @@ int adxl372_init_interrupt(struct device *dev)
 
 	drv_data->gpio = device_get_binding(cfg->gpio_port);
 	if (drv_data->gpio == NULL) {
-		SYS_LOG_ERR("Failed to get pointer to %s device!",
+		LOG_ERR("Failed to get pointer to %s device!",
 		    cfg->gpio_port);
 		return -EINVAL;
 	}
@@ -150,7 +153,7 @@ int adxl372_init_interrupt(struct device *dev)
 			   BIT(cfg->int_gpio));
 
 	if (gpio_add_callback(drv_data->gpio, &drv_data->gpio_cb) < 0) {
-		SYS_LOG_ERR("Failed to set gpio callback!");
+		LOG_ERR("Failed to set gpio callback!");
 		return -EIO;
 	}
 
@@ -161,7 +164,7 @@ int adxl372_init_interrupt(struct device *dev)
 			CONFIG_ADXL372_THREAD_STACK_SIZE,
 			(k_thread_entry_t)adxl372_thread, dev,
 			0, NULL, K_PRIO_COOP(CONFIG_ADXL372_THREAD_PRIORITY),
-			0, 0);
+			0, K_NO_WAIT);
 #elif defined(CONFIG_ADXL372_TRIGGER_GLOBAL_THREAD)
 	drv_data->work.handler = adxl372_work_cb;
 	drv_data->dev = dev;

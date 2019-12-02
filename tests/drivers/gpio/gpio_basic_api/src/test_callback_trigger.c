@@ -79,9 +79,9 @@ static int test_callback(int mode)
 	/* 3. enable callback, trigger PIN_IN interrupt by operate PIN_OUT */
 	cb_cnt = 0;
 	gpio_pin_enable_callback(dev, PIN_IN);
-	k_sleep(100);
+	k_sleep(K_MSEC(100));
 	gpio_pin_write(dev, PIN_OUT, (mode & GPIO_INT_ACTIVE_HIGH) ? 1 : 0);
-	k_sleep(1000);
+	k_sleep(K_MSEC(1000));
 
 	/*= checkpoint: check callback is triggered =*/
 	TC_PRINT("check enabled callback\n");
@@ -93,7 +93,7 @@ static int test_callback(int mode)
 		goto pass_exit;
 	}
 
-	if ((mode & GPIO_INT_LEVEL) == GPIO_INT_LEVEL) {
+	if ((mode & GPIO_INT_EDGE) == GPIO_INT_LEVEL) {
 		if (cb_cnt != MAX_INT_CNT) {
 			TC_ERROR("not trigger callback correctly\n");
 			goto err_exit;

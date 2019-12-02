@@ -10,8 +10,8 @@
 #include <soc/soc.h>
 
 #include <errno.h>
-#include <misc/util.h>
-#include <pinmux.h>
+#include <sys/util.h>
+#include <drivers/pinmux.h>
 
 /* DR_REG_IO_MUX_BASE is a 32-bit constant.  Define a pin mux table
  * using only offsets, in order to reduce ROM footprint.
@@ -20,6 +20,10 @@
  * this array covers only the first function of each I/O pin.
  * Items with offset `0` are not present in the documentation, and
  * trying to configure them will result in -EINVAL being returned.
+ *
+ * Note: DR_REG_IO_MUX_BASE here is used to extract GPIO_X register offset.
+ *       Don't replace it by device tree value, because PERIPHS_IO_MUX_
+ *       is "internally" depends on it.
  */
 #define PIN(id)   ((PERIPHS_IO_MUX_ ## id ## _U) - (DR_REG_IO_MUX_BASE))
 static const u8_t pin_mux_off[] = {
@@ -49,7 +53,7 @@ static u32_t *reg_for_pin(u32_t pin)
 		return NULL;
 	}
 
-	return (u32_t *)(DR_REG_IO_MUX_BASE + off);
+	return (u32_t *)(DT_INST_0_ESPRESSIF_ESP32_PINMUX_BASE_ADDRESS + off);
 }
 
 static int set_reg(u32_t pin, u32_t clr_mask, u32_t set_mask)
@@ -132,7 +136,7 @@ static int pinmux_input(struct device *dev, u32_t pin, u8_t func)
 	if (func == PINMUX_INPUT_ENABLED) {
 		reg = (u32_t *)(DR_REG_GPIO_BASE + line[0]);
 	} else if (func == PINMUX_OUTPUT_ENABLED) {
-		if (pin >= 34 && pin <= 39) {
+		if (pin >= 34U && pin <= 39U) {
 			/* These pins are input only */
 			return -EINVAL;
 		}
@@ -163,7 +167,7 @@ static int pinmux_initialize(struct device *device)
 {
 	u32_t pin;
 
-	for (pin = 0; pin < ARRAY_SIZE(pin_mux_off); pin++) {
+	for (pin = 0U; pin < ARRAY_SIZE(pin_mux_off); pin++) {
 		pinmux_set(NULL, pin, 0);
 	}
 

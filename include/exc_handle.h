@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef _ZEPHYR_EXC_HANDLE_H_
-#define _ZEPHYR_EXC_HANDLE_H_
+#ifndef ZEPHYR_INCLUDE_EXC_HANDLE_H_
+#define ZEPHYR_INCLUDE_EXC_HANDLE_H_
 
 /*
  * This is used by some architectures to define code ranges which may
@@ -15,7 +15,7 @@
  *
  * For example, in the case where user mode passes in a C string via
  * system call, the length of that string needs to be measured. A specially
- * written assembly language version of strlen (z_arch_user_string_len)
+ * written assembly language version of strlen (arch_user_string_len)
  * defines start and end symbols where the memory in the string is examined;
  * if this generates a fault, jumping to the fixup symbol within the same
  * function will return an error result to the caller.
@@ -35,11 +35,11 @@ struct z_exc_handle {
 };
 
 #define Z_EXC_HANDLE(name) \
-	{ &name ## _fault_start, &name ## _fault_end, &name ## _fixup }
+	{ name ## _fault_start, name ## _fault_end, name ## _fixup }
 
-#define Z_EXC_DECLARE(name) \
-	extern void (*name ## _fault_start)(void); \
-	extern void (*name ## _fault_end)(void); \
-	extern void (*name ## _fixup)(void)
+#define Z_EXC_DECLARE(name)          \
+	void name ## _fault_start(void); \
+	void name ## _fault_end(void);   \
+	void name ## _fixup(void)
 
-#endif /* _ZEPHYR_EXC_HANDLE_H_ */
+#endif /* ZEPHYR_INCLUDE_EXC_HANDLE_H_ */

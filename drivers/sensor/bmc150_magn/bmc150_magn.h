@@ -6,12 +6,12 @@
 * SPDX-License-Identifier: Apache-2.0
 */
 
-#ifndef __SENSOR_BMC150_MAGN_H__
-#define __SENSOR_BMC150_MAGN_H__
+#ifndef ZEPHYR_DRIVERS_SENSOR_BMC150_MAGN_BMC150_MAGN_H_
+#define ZEPHYR_DRIVERS_SENSOR_BMC150_MAGN_BMC150_MAGN_H_
 
 #include <zephyr/types.h>
-#include <i2c.h>
-#include <misc/util.h>
+#include <drivers/i2c.h>
+#include <sys/util.h>
 
 #define BMC150_MAGN_REG_CHIP_ID		0x40
 #define BMC150_MAGN_CHIP_ID_VAL		0x32
@@ -73,7 +73,7 @@
 #define BMC150_MAGN_MASK_DRDY_LATCHING          BIT(1)
 #define BMC150_MAGN_MASK_DRDY_INT3_POLARITY     BIT(0)
 
-#define BMC150_MAGN_I2C_ADDR			CONFIG_BMC150_MAGN_I2C_ADDR
+#define BMC150_MAGN_I2C_ADDR			DT_INST_0_BOSCH_BMC150_MAGN_BASE_ADDRESS
 
 #if defined(CONFIG_BMC150_MAGN_SAMPLING_REP_XY) || \
 	defined(CONFIG_BMC150_MAGN_SAMPLING_REP_Z)
@@ -175,7 +175,4 @@ int bmc150_magn_trigger_set(struct device *dev,
 int bmc150_magn_init_interrupt(struct device *dev);
 #endif
 
-#define SYS_LOG_DOMAIN "BMC150_MAGN"
-#define SYS_LOG_LEVEL CONFIG_SYS_LOG_SENSOR_LEVEL
-#include <logging/sys_log.h>
-#endif /* __SENSOR_BMC150_MAGN_H__ */
+#endif /* ZEPHYR_DRIVERS_SENSOR_BMC150_MAGN_BMC150_MAGN_H_ */

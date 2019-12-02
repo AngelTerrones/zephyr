@@ -1,10 +1,7 @@
-# Kconfig - IEEE 802.15.4 driver configuration options
+# IEEE 802.15.4 driver configuration options
 
-#
 # Copyright (c) 2015 Intel Corporation
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 #
 # IEEE 802.15.4 options
@@ -14,25 +11,6 @@ menuconfig IEEE802154
 	default y if NET_L2_IEEE802154 || NET_L2_OPENTHREAD
 
 if IEEE802154
-
-config SYS_LOG_IEEE802154_DRIVER_LEVEL
-	int "IEEE802154 driver log level"
-	depends on SYS_LOG
-	default 0
-	help
-	  Sets log level for 802.15.4 drivers.
-
-	  Levels are:
-
-	  - 0 OFF, do not write
-
-	  - 1 ERROR, only write SYS_LOG_ERR
-
-	  - 2 WARNING, write SYS_LOG_WRN in addition to previous level
-
-	  - 3 INFO, write SYS_LOG_INF in addition to previous levels
-
-	  - 4 DEBUG, write SYS_LOG_DBG in addition to previous levels
 
 config IEEE802154_RAW_MODE
 	bool "Use IEEE 802.15.4 driver without the MAC stack"
@@ -53,15 +31,18 @@ source "drivers/ieee802154/Kconfig.nrf5"
 
 source "drivers/ieee802154/Kconfig.cc1200"
 
+source "drivers/ieee802154/Kconfig.cc13xx_cc26xx"
+
 menuconfig IEEE802154_UPIPE
 	bool "UART PIPE fake radio driver support for QEMU"
 	depends on (BOARD_QEMU_X86 || BOARD_QEMU_CORTEX_M3) && NETWORKING
 	select UART_PIPE
 
+if IEEE802154_UPIPE
+
 config IEEE802154_UPIPE_DRV_NAME
 	string "UART PIPE Driver name"
 	default "IEEE802154_UPIPE"
-	depends on IEEE802154_UPIPE
 
 config IEEE802154_UPIPE_HW_FILTER
 	bool "Hw Filtering"
@@ -106,5 +87,12 @@ config IEEE802154_UPIPE_MAC7
 	  This is the byte 7 of the MAC address.
 
 endif # IEEE802154_UPIPE_RANDOM_MAC
+
+endif # IEEE802154_UPIPE
+
+module = IEEE802154_DRIVER
+module-str = IEEE 802.15.4 driver
+module-help = Sets log level for IEEE 802.15.4 Device Drivers.
+source "subsys/logging/Kconfig.template.log_config"
 
 endif # IEEE802154

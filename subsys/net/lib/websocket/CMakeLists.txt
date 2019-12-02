@@ -1,6 +1,10 @@
-# base64 support is need from mbedtls
-zephyr_include_directories(. $ENV{ZEPHYR_BASE}/ext/lib/crypto/mbedtls/include/)
+# SPDX-License-Identifier: Apache-2.0
 
-zephyr_library()
+zephyr_library_named(websocket_client)
+zephyr_include_directories(${ZEPHYR_BASE}/subsys/net/lib/sockets)
 
-zephyr_library_sources_ifdef(CONFIG_WEBSOCKET websocket.c)
+zephyr_library_sources(
+  websocket.c
+)
+
+zephyr_library_link_libraries_ifdef(CONFIG_MBEDTLS mbedTLS)

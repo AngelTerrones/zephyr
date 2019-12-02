@@ -6,9 +6,8 @@
 
 #include <ztest.h>
 #include <irq_offload.h>
-#include <ksched.h>
-#include <misc/__assert.h>
-#include <misc/util.h>
+#include <sys/__assert.h>
+#include <sys/util.h>
 
 /*
  * @file
@@ -76,7 +75,7 @@ struct timeout_order_data timeout_order_data_mult_fifo[] = {
 };
 
 #define TIMEOUT_ORDER_NUM_THREADS	ARRAY_SIZE(timeout_order_data_mult_fifo)
-#define TSTACK_SIZE			1024
+#define TSTACK_SIZE			(1024 + CONFIG_TEST_EXTRA_STACKSIZE)
 #define FIFO_THREAD_PRIO		-5
 
 static K_THREAD_STACK_ARRAY_DEFINE(ttstack,
@@ -102,7 +101,7 @@ static bool is_timeout_in_range(u32_t start_time, u32_t timeout)
 	u32_t stop_time, diff;
 
 	stop_time = k_cycle_get_32();
-	diff = SYS_CLOCK_HW_CYCLES_TO_NS(stop_time -
+	diff = (u32_t)k_cyc_to_ns_floor64(stop_time -
 			start_time) / NSEC_PER_USEC;
 	diff = diff / USEC_PER_MSEC;
 	return timeout <= diff;
@@ -124,6 +123,8 @@ static void test_thread_pend_and_timeout(void *p1, void *p2, void *p3)
 	u32_t start_time;
 	void *packet;
 
+	k_sleep(K_MSEC(1)); /* Align to ticks */
+
 	start_time = k_cycle_get_32();
 	packet = k_fifo_get(d->fifo, d->timeout);
 	zassert_true(packet == NULL, NULL);
@@ -135,15 +136,24 @@ static void test_thread_pend_and_timeout(void *p1, void *p2, void *p3)
 static int test_multiple_threads_pending(struct timeout_order_data *test_data,
 					 int test_data_size)
 {
-	int ii;
+	int ii, j;
+	u32_t diff_ms;
 
 	for (ii = 0; ii < test_data_size; ii++) {
 		tid[ii] = k_thread_create(&ttdata[ii], ttstack[ii], TSTACK_SIZE,
 				test_thread_pend_and_timeout,
 				&test_data[ii], NULL, NULL,
-				FIFO_THREAD_PRIO, K_INHERIT_PERMS, 0);
+				FIFO_THREAD_PRIO, K_INHERIT_PERMS, K_NO_WAIT);
 	}
 
+	/* In general, there is no guarantee of wakeup order when multiple
+	 * threads are woken up on the same tick. This can especially happen
+	 * when the system is loaded. However, in this particular test, we
+	 * are controlling the system state and hence we can make a reasonable
+	 * estimation of a timeout occurring with the max deviation of an
+	 * additional tick. Hence the timeout order may slightly be different
+	 * from what we normally expect.
+	 */
 	for (ii = 0; ii < test_data_size; ii++) {
 		struct timeout_order_data *data =
 			k_fifo_get(&timeout_order_fifo, K_FOREVER);
@@ -152,9 +162,31 @@ static int test_multiple_threads_pending(struct timeout_order_data *test_data,
 			TC_PRINT(" thread (q order: %d, t/o: %d, fifo %p)\n",
 				data->q_order, data->timeout, data->fifo);
 		} else {
-			TC_ERROR(" *** thread %d woke up, expected %d\n",
-						data->timeout_order, ii);
-			return TC_FAIL;
+			/* Get the index of the thread which should have
+			 * actually timed out.
+			 */
+			for (j = 0; j < test_data_size; j++) {
+				if (test_data[j].timeout_order == ii) {
+					break;
+				}
+			}
+
+			if (data->timeout > test_data[j].timeout) {
+				diff_ms = data->timeout - test_data[j].timeout;
+			} else {
+				diff_ms = test_data[j].timeout - data->timeout;
+			}
+
+			if (k_ms_to_ticks_ceil32(diff_ms) == 1) {
+				TC_PRINT(
+				" thread (q order: %d, t/o: %d, fifo %p)\n",
+				data->q_order, data->timeout, data->fifo);
+			} else {
+				TC_ERROR(
+				" *** thread %d woke up, expected %d\n",
+				data->timeout_order, ii);
+				return TC_FAIL;
+			}
 		}
 	}
 
@@ -185,13 +217,13 @@ static int test_multiple_threads_get_data(struct timeout_order_data *test_data,
 		tid[ii] = k_thread_create(&ttdata[ii], ttstack[ii], TSTACK_SIZE,
 				test_thread_pend_and_get_data,
 				&test_data[ii], NULL, NULL,
-				K_PRIO_PREEMPT(0), K_INHERIT_PERMS, 0);
+				K_PRIO_PREEMPT(0), K_INHERIT_PERMS, K_NO_WAIT);
 	}
 
 	tid[ii] = k_thread_create(&ttdata[ii], ttstack[ii], TSTACK_SIZE,
 				test_thread_pend_and_timeout,
 				&test_data[ii], NULL, NULL,
-				K_PRIO_PREEMPT(0), K_INHERIT_PERMS, 0);
+				K_PRIO_PREEMPT(0), K_INHERIT_PERMS, K_NO_WAIT);
 
 	for (ii = 0; ii < test_data_size-1; ii++) {
 		k_fifo_put(test_data[ii].fifo, get_scratch_packet());
@@ -267,8 +299,10 @@ static void test_timeout_empty_fifo(void)
 	void *packet;
 	u32_t start_time, timeout;
 
+	k_sleep(K_MSEC(1)); /* Align to ticks */
+
 	/* Test empty fifo with timeout */
-	timeout = 10;
+	timeout = 10U;
 	start_time = k_cycle_get_32();
 	packet = k_fifo_get(&fifo_timeout[0], timeout);
 	zassert_true(packet == NULL, NULL);
@@ -318,17 +352,19 @@ static void test_timeout_fifo_thread(void)
 	struct reply_packet reply_packet;
 	u32_t start_time, timeout;
 
+	k_sleep(K_MSEC(1)); /* Align to ticks */
+
 	/*
 	 * Test fifo with some timeout and child thread that puts
 	 * data on the fifo on time
 	 */
-	timeout = 10;
+	timeout = 10U;
 	start_time = k_cycle_get_32();
 
 	tid[0] = k_thread_create(&ttdata[0], ttstack[0], TSTACK_SIZE,
 				test_thread_put_timeout, &fifo_timeout[0],
 				&timeout, NULL,
-				FIFO_THREAD_PRIO, K_INHERIT_PERMS, 0);
+				FIFO_THREAD_PRIO, K_INHERIT_PERMS, K_NO_WAIT);
 
 	packet = k_fifo_get(&fifo_timeout[0], timeout + 10);
 	zassert_true(packet != NULL, NULL);
@@ -344,7 +380,7 @@ static void test_timeout_fifo_thread(void)
 	tid[0] = k_thread_create(&ttdata[0], ttstack[0], TSTACK_SIZE,
 				test_thread_timeout_reply_values,
 				&reply_packet, NULL, NULL,
-				FIFO_THREAD_PRIO, K_INHERIT_PERMS, 0);
+				FIFO_THREAD_PRIO, K_INHERIT_PERMS, K_NO_WAIT);
 
 	k_yield();
 	packet = k_fifo_get(&timeout_order_fifo, K_NO_WAIT);
@@ -363,7 +399,7 @@ static void test_timeout_fifo_thread(void)
 	tid[0] = k_thread_create(&ttdata[0], ttstack[0], TSTACK_SIZE,
 				test_thread_timeout_reply_values,
 				&reply_packet, NULL, NULL,
-				FIFO_THREAD_PRIO, K_INHERIT_PERMS, 0);
+				FIFO_THREAD_PRIO, K_INHERIT_PERMS, K_NO_WAIT);
 
 	k_yield();
 	packet = k_fifo_get(&timeout_order_fifo, K_NO_WAIT);
@@ -383,7 +419,7 @@ static void test_timeout_fifo_thread(void)
 	tid[0] = k_thread_create(&ttdata[0], ttstack[0], TSTACK_SIZE,
 				test_thread_timeout_reply_values_wfe,
 				&reply_packet, NULL, NULL,
-				FIFO_THREAD_PRIO, K_INHERIT_PERMS, 0);
+				FIFO_THREAD_PRIO, K_INHERIT_PERMS, K_NO_WAIT);
 
 	packet = k_fifo_get(&timeout_order_fifo, K_FOREVER);
 	zassert_true(packet != NULL, NULL);
@@ -457,7 +493,7 @@ static void test_timeout_threads_pend_fail_on_fifo(void)
  */
 static void test_timeout_setup(void)
 {
-	s32_t ii;
+	intptr_t ii;
 
 	/* Init kernel objects */
 	k_fifo_init(&fifo_timeout[0]);
@@ -483,11 +519,11 @@ void test_main(void)
 	test_timeout_setup();
 
 	ztest_test_suite(test_fifo_timeout,
-		ztest_unit_test(test_timeout_empty_fifo),
+		ztest_1cpu_unit_test(test_timeout_empty_fifo),
 		ztest_unit_test(test_timeout_non_empty_fifo),
-		ztest_unit_test(test_timeout_fifo_thread),
-		ztest_unit_test(test_timeout_threads_pend_on_fifo),
-		ztest_unit_test(test_timeout_threads_pend_on_dual_fifos),
-		ztest_unit_test(test_timeout_threads_pend_fail_on_fifo));
+		ztest_1cpu_unit_test(test_timeout_fifo_thread),
+		ztest_1cpu_unit_test(test_timeout_threads_pend_on_fifo),
+		ztest_1cpu_unit_test(test_timeout_threads_pend_on_dual_fifos),
+		ztest_1cpu_unit_test(test_timeout_threads_pend_fail_on_fifo));
 	ztest_run_test_suite(test_fifo_timeout);
 }
