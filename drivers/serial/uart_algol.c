@@ -6,14 +6,12 @@
 #include <arch/cpu.h>
 #include <uart.h>
 #include <sys_io.h>
-#include <board.h>
 
-static unsigned char uart_algol_poll_out(struct device *dev, unsigned char c) {
+static void uart_algol_poll_out(struct device *dev, unsigned char c) {
         volatile int *uart_status = (int *)RISCV_UART_STATUS;
         volatile int *uart_tx     = (int *)RISCV_UART_TX;
         while(!(uart_status[0] & 0x1));
         uart_tx[0] = c;
-        return c;
 }
 
 static int uart_algol_poll_in(struct device *dev, unsigned char *c) {
@@ -23,7 +21,7 @@ static int uart_algol_poll_in(struct device *dev, unsigned char *c) {
 static int uart_algol_init(struct device *dev) {
         // Configure the UART for BAUD_RATE
         volatile int *uart_status = (int *)RISCV_UART_BAUD_CONFIG;
-        uart_status[0] = sys_clock_hw_cycles_per_sec/1000000; // hardcoded, for now...
+        uart_status[0] = sys_clock_hw_cycles_per_sec()/1000000; // hardcoded, for now...
         return 0;
 }
 

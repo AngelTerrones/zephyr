@@ -6,7 +6,7 @@ config SOC_SERIES
 
 config COMPILER_OPT
        string
-       default "-march=RV32I"
+       default "-march=rv32i -Os"
 
 config SYS_CLOCK_HW_CYCLES_PER_SEC
        int
@@ -48,4 +48,20 @@ config RISCV_ROM_SIZE
        hex
        default 0x5000
 
-endif # SOC_SERIES_RISCV32_EV
+config RISCV_MACHINE_TIMER
+    bool
+    default y
+
+config SYS_CLOCK_TICKS_PER_SEC
+    int
+    default 1000
+
+config FORCE_NO_ASSERT
+    bool
+    default y
+
+config ASSERT
+    bool
+    default n
+
+endif # SOC_SERIES_RISCV32_ALGOL
